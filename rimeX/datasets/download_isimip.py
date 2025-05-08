@@ -159,11 +159,11 @@ def aggregate_time(time_aggregation, input_file, output_file, frequency="monthly
     take a 10-year netcdf file with daily values, and output a monthly values
     instead, with mean, max, min or cumulative values.
     """
-    
+
     if frequency != "monthly" and frequency != "daily":
         raise NotImplementedError("Only monthly and daily frequency is supported for now")
 
-    if frequency == "monthly": 
+    if frequency == "monthly":
         if time_aggregation in ("mean", "avg", "", None):
             cdo(f'monavg {input_file} {output_file}', dry_run=dry_run)
         elif time_aggregation in ("max", "min", "sum"):
@@ -173,7 +173,7 @@ def aggregate_time(time_aggregation, input_file, output_file, frequency="monthly
     if frequency == 'daily' and input_file != output_file:
         import os
         os.rename(input_file, output_file)
-    
+
 
 
 def download(path, folder=None, queue=False, overwrite=False, remove_zip=True, dry_run=False):
@@ -499,10 +499,10 @@ class Indicator(GenericIndicator):
                 cat = f"cdo timpctl,{self.climatology_quantile*100} {cattedinput} {filepath_min} {filepath_max} {filepath}"
                 # cat = f"cdo timpctl,{self.climatology_quantile*100} {cattedinput} -timmin {cattedinput} -timmax {cattedinput} {{output}}"
                 indicator.download("historical", climate_forcing, dry_run=dry_run, cat=cat, output_file=filepath, **ensemble_specifiers)
-            elif self.climatology_manual: 
+            elif self.climatology_manual:
                 filepath = Path(str(filepath_base) + ".climatology")
                 cat = f'cdo -cat {{input}} {{output}}'
-                indicator.download("historical", climate_forcing, dry_run=dry_run, cat=cat, output_file=filepath, **ensemble_specifiers)   
+                indicator.download("historical", climate_forcing, dry_run=dry_run, cat=cat, output_file=filepath, **ensemble_specifiers)
             else:
                 filepath = Path(str(filepath_base) + ".climatology")
                 cat = f"cdo ymonmean -cat [{{input}}] {{output}}"
