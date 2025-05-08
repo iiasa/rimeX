@@ -255,27 +255,8 @@ def _matches(key1, key2):
 #     return os.path.join(folder, name, experiment, model, f"{model.lower()}{ensembletag}{biascorrectiontag}{isimiptag}_{experiment}_{name}_{frequency}.nc")
 
 
-class ISIMIPDataBase:
-    def __init__(self, db=[], download_folder=None):
-        """
-        db: a list of results as returned by _request_isimip_meta
-        """
-        self.db = db
-        self.download_folder = download_folder or CONFIG["isimip.download_folder"]
 
-    def filter(self, **kwargs):
-        return [r for r in self.db if all(_matches(r['specifiers'][k], v) for k, v in kwargs.items() if v is not None)]
-
-    def __iter__(self):
-        for result in self.db:
-            yield result
-
-
-def _are_consecutive_time_slices(time_slices):
-    return all(t2[0] == t1[1]+1 for t1, t2 in zip(time_slices[:-1], time_slices[1:]))
-
-
-def load_db_from_file(db_file):
+def load_db_from_file(db_file, download_folder=None):
 
     db_file = Path(db_file)
 
@@ -294,15 +275,50 @@ def load_db_from_file(db_file):
     if db_file.endswith(".json"):
         import json
         with open(db_file) as f:
-            return json.load(f)
+            db = json.load(f)
 
     elif db_file.endswith((".yaml", ".yml")):
         import yaml
         with open(db_file) as f:
-            return yaml.safe_load(f)
+            db = yaml.safe_load(f)
 
     else:
         raise ValueError(f"Unknown file format for {db_file}. Only .json and .yaml are supported.")
+
+    return ISIMIPDataBase(db, download_folder)
+
+
+
+class ISIMIPDataBase:
+    def __init__(self, db=[], download_folder=None):
+        """
+        db: a list of results as returned by _request_isimip_meta
+        """
+        self.db = db
+        self.download_folder = download_folder or CONFIG["isimip.download_folder"]
+
+    def filter(self, **kwargs):
+        return [r for r in self.db if all(_matches(r['specifiers'][k], v) for k, v in kwargs.items() if v is not None)]
+
+    def __iter__(self):
+        for result in self.db:
+            yield result
+
+    @classmethod
+    def load(cls, db_file, download_folder=None):
+        return load_db_from_file(db_file, download_folder)
+
+    def to_json(self, filename, folder=None):
+        import json
+        folder = folder or Path(self.download_folder)/"db"
+        filepath = Path(folder) / filename
+        filepath.parent.mkdir(parents=True, exist_ok=True)
+        logger.info(f"Saving {len(self.db)} database entries to {filepath}")
+        with open(filepath, "w") as f:
+            json.dump(self.db, f)
+
+def _are_consecutive_time_slices(time_slices):
+    return all(t2[0] == t1[1]+1 for t1, t2 in zip(time_slices[:-1], time_slices[1:]))
 
 
 class Indicator(GenericIndicator):
@@ -335,7 +351,7 @@ class Indicator(GenericIndicator):
             if db is not None:
                 logger.warning("db is set in both the config and the constructor. Ignoring the config.")
             else:
-                db = load_db_from_file(self.isimip_meta["db_file"])
+                db = ISIMIPDataBase.load(self.isimip_meta["db_file"])
 
         self.isimip_meta.setdefault("year_min", year_min or CONFIG["isimip.historical_year_min"])
 
@@ -424,6 +440,9 @@ class Indicator(GenericIndicator):
                 self._db = ISIMIPDataBase(results, self._isimip_folder)
             else:
                 self._db = ISIMIPDataBase(request_dataset(self.name, **self.isimip_meta), self._isimip_folder)
+
+            self._db.to_json(f"{self.name}.json")
+
         return self._db
 
     @property
