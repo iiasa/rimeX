@@ -26,6 +26,7 @@ dependencies = [
   "xarray",
   "tqdm",
   "flatdict",
+  "isimip_client",
 ]
 
 dynamic = ["version"]
