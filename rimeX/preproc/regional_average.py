@@ -273,6 +273,9 @@ def main():
 
             indicator = Indicator.from_config(variable)
 
+            logger.info(f"Found {len(indicator.simulations)} simulations for {variable}")
+            indicator_simus = []
+
             for simu in indicator.simulations:
                 if not _matches(simu["climate_forcing"], o.model):
                     continue
@@ -281,7 +284,12 @@ def main():
                 if not _matches(simu.get("model"), o.impact_model):
                     continue
 
-                yield indicator, simu
+                indicator_simus.append((indicator, simu))
+
+            logger.info(f"After filtering, {len(indicator_simus)} simulations remain for {variable}")
+
+            yield from indicator_simus
+
 
 
     all_items = [(indicator, simu) for indicator, simu in iterator()]

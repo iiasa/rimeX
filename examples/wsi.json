@@ -1,0 +1,16 @@
+[
+    {
+        "files": [{
+            "time_slice": [1980, 2100],
+            "path" : "wsi/wsi-gfdl-esm4_impact1_historical.nc"
+        }
+        ],
+        "specifiers": {
+            "climate_variable" : "wsi",
+            "climate_forcing" : "GFDL-ESM4",
+            "climate_scenario" : "ssp585",
+            "model" : "impact1",
+            "simulation_round" : "isimip3b"
+        }
+    }
+]
