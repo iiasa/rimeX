@@ -275,6 +275,36 @@ def _are_consecutive_time_slices(time_slices):
     return all(t2[0] == t1[1]+1 for t1, t2 in zip(time_slices[:-1], time_slices[1:]))
 
 
+def load_db_from_file(db_file):
+
+    db_file = Path(db_file)
+
+    if not db_file.exists():
+        for root in [CONFIG["isimip.download_folder"]]:
+            test_file = Path(root) / db_file
+            if test_file.exists():
+                db_file = test_file
+                break
+
+    if not db_file.exists():
+        raise FileNotFoundError(f"File {db_file} does not exist. Please check the path. Relative paths from the current working directory or isimip download directory {CONFIG['isimip.download_folder']} are also supported.")
+
+    db_file = str(db_file)
+
+    if db_file.endswith(".json"):
+        import json
+        with open(db_file) as f:
+            return json.load(f)
+
+    elif db_file.endswith((".yaml", ".yml")):
+        import yaml
+        with open(db_file) as f:
+            return yaml.safe_load(f)
+
+    else:
+        raise ValueError(f"Unknown file format for {db_file}. Only .json and .yaml are supported.")
+
+
 class Indicator(GenericIndicator):
 
     def __init__(self, name, frequency="monthly", folder=None,
@@ -300,6 +330,12 @@ class Indicator(GenericIndicator):
                     raise ValueError(f"Unknown argument {k}")
             else:
                 raise ValueError(f"Unknown argument {k}")
+
+        if self.isimip_meta.get("db_file"):
+            if db is not None:
+                logger.warning("db is set in both the config and the constructor. Ignoring the config.")
+            else:
+                db = load_db_from_file(self.isimip_meta["db_file"])
 
         self.isimip_meta.setdefault("year_min", year_min or CONFIG["isimip.historical_year_min"])
 
