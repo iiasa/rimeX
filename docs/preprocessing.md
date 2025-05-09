@@ -1,6 +1,6 @@
 # Pre-processing
 
-Rime can handle indicator pre-processing, provided the [`config.toml` file](../README.md#config-files-and-default-parameters) is updated.
+Rime can handle indicator pre-processing, provided the [`config.toml` file](/README.md#config-files-and-default-parameters) is updated.
 Each indicator should provide enough metadata to be identified unequivocally on the ISIMIP database or on the local disk.
 
 ## ISIMIP variables: basic climate model output
@@ -73,7 +73,7 @@ climatology_quantile = 0.999
 custom = "rimeX.indicators:extreme_daily_rainfall"
 ```
 
-This makes use of a custom python function, here defined in a rime submodule [rimeX.indicators](../rimeX/indicators.py).
+This makes use of a custom python function, here defined in a rime submodule [rimeX.indicators](/rimeX/indicators.py).
 The function is called on each time-slice file and passed the unnamed parameters (*args):
 
 - input_daily_files : list of files, must be the same length of `depends_on`
@@ -108,7 +108,7 @@ Besides `expr` and `custom`, also implemented (but not used / tested so far) is 
 
 ## Custom indicator not downloaded from ISIMIP
 
-See the `wsi` entry in [config.toml](../rimeX/config.toml) and the corresponding [examples/wsi.json](../examples/wsi.json) db file:
+See the `wsi` entry in [config.toml](/rimeX/config.toml) and the corresponding [examples/wsi.json](/examples/wsi.json) db file:
 
 ```toml
 [indicator.wsi.isimip_meta]
