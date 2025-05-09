@@ -9,7 +9,7 @@ The simple direct outputs from climate models do not need any specific descripti
 
 ```toml
 [indicator.<name>]
-frequency = "montly"
+frequency = "monthly"
 # frequency = "daily"
 # frequency = "annual"
 spatial_aggregation = ["latWeight", "pop2020", "gdp2020"]
