@@ -48,8 +48,6 @@ The code is currently contained in [rimeX/preproc/quantilemaps.py](/rimeX/prepro
 
 (there is also a corresponding command line `rime-pre-quantilemap` that handles the creation of the quantile maps via `make_quantile_map_array`).
 
-See the inline doc `help()` for documentation.
-
 For example, that's what we have for the Climate Impact Explorer:
 
 ```python
@@ -57,20 +55,28 @@ import pandas as pd
 import xarray as xa
 from rimeX.preproc.quantilemaps import make_quantilemap_prediction, get_filepath
 
-def predict_from_quantilemap(gmt, indicator_name, region, subregion, season, weight, quantiles=[0.5, .05, .95], samples=5000, clip=True, seed=42, suffix="_eq", **kw):
-
-    fp = get_filepath(indicator_name, season=season, suffix=suffix, region=region, regional_weights=weight)
-
-    with xa.open_dataset(fp) as ds:
-        impact_data = ds[indicator_name].sel(region=subregion).load()
-
-    return make_quantilemap_prediction(impact_data, gmt, samples=samples, quantiles=quantiles, clip=clip, seed=seed, **kw).T.to_pandas()
-
 # gmt loaded as a dataframe time as index x ensemble as columns
 gmt = pd.read_csv(...)
+
+# specify indicator
+indicator_name = "rx5day"
+region = "ITA"
+subregion = "ITA"
+season = "annual"
+weight = "latWeights"
+
+fp = get_filepath(indicator_name, season=season, suffix=suffix, region=region, regional_weights=weight)
+
+with xa.open_dataset(fp) as ds:
+	impact_data = ds[indicator_name].sel(region=subregion).load()
+
+results = make_quantilemap_prediction(impact_data, gmt, quantiles=[0.5, .05, .95], samples=5000, clip=True, seed=42, suffix="_eq").T.to_pandas()
+
 results = predict_from_quantilemap(gmt, "rx5day", "ITA", "ITA", "annual", "latWeights")
 results.to_netcdf("cie_rx5day.nc")
 ```
+
+See the inline doc `help()` for full documentation.
 
 
 ### Command Line Interface
