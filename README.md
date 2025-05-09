@@ -70,10 +70,9 @@ fp = get_filepath(indicator_name, season=season, suffix=suffix, region=region, r
 with xa.open_dataset(fp) as ds:
 	impact_data = ds[indicator_name].sel(region=subregion).load()
 
-results = make_quantilemap_prediction(impact_data, gmt, quantiles=[0.5, .05, .95], samples=5000, clip=True, seed=42, suffix="_eq").T.to_pandas()
+results = make_quantilemap_prediction(impact_data, gmt, quantiles=[0.5, .05, .95], samples=5000, clip=True, seed=42, suffix="_eq")
 
-results = predict_from_quantilemap(gmt, "rx5day", "ITA", "ITA", "annual", "latWeights")
-results.to_netcdf("cie_rx5day.nc")
+results.T.to_pandas().to_csv("cie_rx5day.csv")
 ```
 
 See the inline doc `help()` for full documentation.
