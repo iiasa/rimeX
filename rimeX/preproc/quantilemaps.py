@@ -41,6 +41,7 @@ def make_quantile_map_array(indicator:Indicator, warming_levels:pd.DataFrame,
     indicator : GenericIndicator instance
         It contains information about which files to open and how to transform the data.
         This is typically obtained via `rimeX.download_isimip.Indicator.from_config("<indicator_name>")`
+
     warming_levels : pd.DataFrame
         DataFrame with the warming levels to compute the quantile maps for.
         The columns must contain the following keys:
@@ -53,25 +54,34 @@ def make_quantile_map_array(indicator:Indicator, warming_levels:pd.DataFrame,
         The DataFrame must be sorted by "warming_level" and "year".
         The DataFrame must contain the same columns as the simulations in the indicator.
         The DataFrame must contain the same columns as the simulations in the indicator.
+
     quantile_bins : int
         Number of quantile bins to compute. Default is 21.
+
     season : str
         The season to compute the quantile maps for. Default is "annual".
+
     running_mean_window : int
         The window size for the running mean. Default is 21.
+
     projection_baseline : tuple
         The projection baseline period to use for the transformation. Default is None.
+
     equiprobable_models : bool
         If True, the models are weighted equally within each warming level bin,
         regardless of the number of data points (scenarios, time slices) contributed by each model. Default is True.
+
     skip_nans : bool
         If True, skip NaN values in the quantile maps. Default is False.
+
     open_func_kwargs : dict
         Additional keyword arguments to pass to the open function of the indicator (e.g. regional, regional_weight, isel...).
+
     warming_level_simulation_key : list
         The keys to identify the warming level simulation (default: ["model", "experiment", "ensemble"]
         if "ensemble" is present in the warming level file otherwise ["model", "experiment"] )
         The keys must be present in the warming levels DataFrame and the simulations of the indicator.
+
     wl_to_indicator_mapping : dict
         A mapping of the warming level keys to the indicator keys. Default is {"experiment": "climate_scenario", "model": "climate_forcing"}.
         The keys must be present in the warming levels DataFrame.
@@ -298,20 +308,27 @@ def make_quantilemap_prediction(a, gmt, samples=100, seed=42, quantiles=[0.5, .0
     Parameters
     ----------
     a : xa.DataArray as produced by make_quantile_map_array
+
     gmt : pandas DataFrame for the global mean temperature, with years as index and ensemble members as columns
+
     samples : number of samples to draw (default: 100)
+
     seed : random seed
+
     quantiles : quantiles to compute (default: [0.5, .05, .95])
         if None, all ensemble members are returned
+
     mode : {"deterministic", "factorial", "montecarlo"}
         - "deterministic" (the default): gmt is resampled deterministically
         - "montecarlo" : gmt is simply resampled (may speed-up the computation at the cost of some loss of precision)
         - "factorial" : gmt is combined with the quantile map in a factorial way
             The total number of samples is then samples * gmt.shape[1]
         Note the impact distribution is always resampled in a deterministic way
+
     clip : bool
         if True, clip the GMT data to the range of the quantile map, otherwise fill with NaNs
         False by default
+
     skipna : bool
         if True, skip NaN values in the quantiles calculation (default: False)
         can be useful if clip is set to False

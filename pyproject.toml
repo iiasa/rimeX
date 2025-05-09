@@ -27,6 +27,7 @@ dependencies = [
   "tqdm",
   "flatdict",
   "isimip_client",
+  "scipy",
 ]
 
 dynamic = ["version"]
