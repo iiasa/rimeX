@@ -49,13 +49,13 @@ depends_on_climatology = true
 climatology_quantile = 0.999
 custom = "rimeX.indicators:extreme_daily_rainfall"
 ```
-This makes use of a custom python function, here defined in a rime submodule [rimeX.indicators](rimeX/indicators.py).
+This makes use of a custom python function, here defined in a rime submodule [rimeX.indicators](../rimeX/indicators.py).
 See that file for details.
 
 
 ## Custom indicator not downloaded from ISIMIP
 
-See the `wsi` entry in [config.toml](rimeX/config.toml) and the corresponding [examples/wsi.json](examples/wsi.json) db file:
+See the `wsi` entry in [config.toml](../rimeX/config.toml) and the corresponding [examples/wsi.json](../examples/wsi.json) db file:
 
 ```toml
 [indicator.wsi.isimip_meta]
