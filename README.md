@@ -157,18 +157,6 @@ A few practical differences, that will be examplified below:
 
 - the binning and recombination method does not (yet?) allow for on-the-fly interpolation, so to interpolate across warming levels it is necessary to pass explicit parameters `--interp-warming-levels`, and in case `--match-year` is also specified, `--interp-year`.
 
-### Download ISIMIP indicators `rime-download-isimip`
-
-The code has been recently extended to handle a larger number of extended indicators.
-In additional ISIMIP variables, a number of indicators are now available which are defined in [config.toml](rime/config.toml).
-The new indicators have been downloaded from the python interactive prompt, such as
-```python
-from rime.download_isimip import Indicator
-indicator = Indicator.from_config("wet_bulb_temperature")
-list(indicator.download_all())
-```
-The command `rime-download-isimip --indictor wet_bulb_temperarure` should also work.
-
 
 ### Comparison with `rime-run-table`
 
@@ -350,9 +338,21 @@ If used interactively or imported from a custom script, the config can be change
 
 By default, ISIMIP3b data are used, but that can be changed to ISIMIP2b via the `--simulation-round` flag (available models and experiments and defaults are adjusted automatically).
 
-## Pre-processing
+## Download and pre-processing of new indicators
+
+In addition to ISIMIP variables, a number of indicators are now available which are defined in [config.toml](rime/config.toml).
 
 See [dedicated documentation](docs/preprocessing.md)
+
+The new indicators have been downloaded from the python interactive prompt, such as
+
+```python
+from rime.download_isimip import Indicator
+indicator = Indicator.from_config("wet_bulb_temperature")
+list(indicator.download_all())
+```
+
+The command `rime-download-isimip --indicator wet_bulb_temperarure` should also work.
 
 ## TODO
 
