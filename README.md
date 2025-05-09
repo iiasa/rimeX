@@ -77,12 +77,9 @@ results.T.to_pandas().to_csv("cie_rx5day.csv")
 
 See the inline doc `help()` for full documentation.
 
-
 ### Command Line Interface
 
 See the [CLI documentation](/docs/cli.md).
-
-Some of these commands might be deprecated in the future, to focus on [quantile maps](#quantile-maps).
 
 ## Config files and default parameters
 
