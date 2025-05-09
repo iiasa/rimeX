@@ -38,27 +38,58 @@ def make_quantile_map_array(indicator:Indicator, warming_levels:pd.DataFrame,
 
     Parameters
     ----------
-    indicator : GenericIndicator instance or any object with the following attributes:
-        - name : str
-        - simulations : list of dict that contains the keys to identify a unique model simulation
-        - open_simulation : function that returns a xa.DataArray via `open_simulation(**simulation, **open_func_kwargs)`
-            where:
-                - simulation represents any item from the `simulations` list defined above
-                - open_func_kwargs are additional keyword arguments passed to `make_quantile_map_array`
-                At the time of writing, open_func_kwargs determiend whether gridded or regional-average files are to be loaded
-                and consists of `region=None, regional_weight="latWeight"` (and also an unused `regional=False` keyword argument)
-                (see `GenericIndicator.open_simulation` for details)
-        - transform : attribute transform the indicator data (optional)
-
-    ...
-    warming_level_simulation_key : list of str
-        keys to identify the warming level simulation (default: ["model", "experiment", "ensemble"] if "ensemble" is present in the warming level file otherwise ["model", "experiment"] )
-
+    indicator : GenericIndicator instance
+        It contains information about which files to open and how to transform the data.
+        This is typically obtained via `rimeX.download_isimip.Indicator.from_config("<indicator_name>")`
+    warming_levels : pd.DataFrame
+        DataFrame with the warming levels to compute the quantile maps for.
+        The columns must contain the following keys:
+        - "warming_level" : the warming level (in degrees)
+        - "year" : the year of the warming level
+        - "model" : the model name
+        - "experiment" : the experiment name
+        - "ensemble" : the ensemble member (optional)
+        - "realization" : the realization (optional)
+        The DataFrame must be sorted by "warming_level" and "year".
+        The DataFrame must contain the same columns as the simulations in the indicator.
+        The DataFrame must contain the same columns as the simulations in the indicator.
+    quantile_bins : int
+        Number of quantile bins to compute. Default is 21.
+    season : str
+        The season to compute the quantile maps for. Default is "annual".
+    running_mean_window : int
+        The window size for the running mean. Default is 21.
+    projection_baseline : tuple
+        The projection baseline period to use for the transformation. Default is None.
+    equiprobable_models : bool
+        If True, the models are weighted equally within each warming level bin,
+        regardless of the number of data points (scenarios, time slices) contributed by each model. Default is True.
+    skip_nans : bool
+        If True, skip NaN values in the quantile maps. Default is False.
+    open_func_kwargs : dict
+        Additional keyword arguments to pass to the open function of the indicator (e.g. regional, regional_weight, isel...).
+    warming_level_simulation_key : list
+        The keys to identify the warming level simulation (default: ["model", "experiment", "ensemble"]
+        if "ensemble" is present in the warming level file otherwise ["model", "experiment"] )
+        The keys must be present in the warming levels DataFrame and the simulations of the indicator.
     wl_to_indicator_mapping : dict
-        mapping between the warming level file and the indicator simulations (default: {"experiment": "climate_scenario", "model": "climate_forcing"})
+        A mapping of the warming level keys to the indicator keys. Default is {"experiment": "climate_scenario", "model": "climate_forcing"}.
+        The keys must be present in the warming levels DataFrame.
+        The keys must be present in the simulations of the indicator.
 
+    Returns
+    -------
+    warming_level_data : xa.DataArray
+        The quantile maps for the given indicator and warming levels.
+        The DataArray has the following dimensions:
+        - "warming_level" : the warming level (in degrees)
+        - "quantile" : the quantile (0.0 to 1.0)
+        - "lat" : the latitude
+        - "lon" : the longitude
+        The DataArray has the same coordinates as the indicator.
+        The DataArray has the same attributes as the indicator.
+        The DataArray has the same units as the indicator.
     """
-
 
     simulations = indicator.simulations
     all_experiments = sorted(set(simu["climate_scenario"] for simu in simulations))
