@@ -43,11 +43,10 @@ That's the latest development in rime.
 
 The code is currently contained in [rimeX/preproc/quantilemaps.py](/rimeX/preproc/quantilemaps.py)
 
-- [make_quantile_map_array](https://github.com/iiasa/rime/blob/rimeX/rimeX/preproc/quantilemaps.py#L30-L224) : create the quantile map as indicated in the picture.
-- [make_quantilemap_prediction](https://github.com/iiasa/rime/blob/rimeX/rimeX/preproc/quantilemaps.py#264-L333) : use the output of `make_quantile_map_array` to make predictions.
+- [make_quantile_map_array](https://github.com/iiasa/rime/blob/rimeX/rimeX/preproc/quantilemaps.py#L30-L265) : create the quantile map as indicated in the picture.
+- [make_quantilemap_prediction](https://github.com/iiasa/rime/blob/rimeX/rimeX/preproc/quantilemaps.py#305-L381) : use the output of `make_quantile_map_array` to make predictions.
 
-The corresponding command line `rime-pre-quantilemap` handles the creation of the quantile map (`make_quantile_map_array`), not the predictions themselves, which
-msut be done calling `make_quantilemap_prediction` directly in python.
+(there is also a corresponding command line `rime-pre-quantilemap` that handles the creation of the quantile maps via `make_quantile_map_array`).
 
 
 ### Command Line Interface
