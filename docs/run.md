@@ -1,32 +1,21 @@
-Note the cli functionality does not include the latest quantile maps usage, which is only implemented as python API. See the [README](/README.md)
+# Use the emulator
 
-## CLI Usage
-
-The following scripts are made available, for which inline help is available with `-h` or `--help`:
-
-- Data download and pre-processing scripts (presently ISIMIP only, variables tas and pr, written for the CIE dataset and masks)
-
-	- `rime-download-isimip` : download ISIMIP data
-	- `rime-download` : download other datasets (Werning et al 2024) etc. (platform-independent)
-  	- `rime-pre-gmt` : pre-processing: crunch global-mean-temperature
-	- `rime-pre-region` : pre-precessing: crunch regional averages (=> this currently requires Climate Impact Explorer masks)
-	- `rime-pre-wl` : crunch the warming levels
-	- `rime-pre-digitize` : pre-compute digitized regional average based on warming levels (optional -- DEPRECATED)
-	- `rime-pre-quantilemap` : produce quantile maps (after running rime-pre-gmt, rime-pre-region and rime-pre-wl)
-
-- Actually use the emulator (works anywhere as long as the data is available) -- EXPERIMENTAL
-
-	- `rime-run-timeseries` : (OUT OF DATE IN ITS CURRENT FORM -> should be replaced with QUANTILE MAP approach) run the main emulator with proper uncertainty calculations (time-series)
-	- `rime-run-table` : vectorized version of `rime-run-timeseries` with on-the-fly interpolation, without uncertainties recombination
-	- `rime-run-map` : run the map emulator
-
-- Also useful to specify the data paths:
-
-	- `rime-config` : print the config to screen (toml format)
-
-Of course, any of the functions can be called directly. Inline documentation is available.
+The command-line interface is EXPERIMENTAL and part of it might become DEPRECATED as the code undergoes consolidation around core "quantile maps" functionality.
 
 See the associated [notebook](/notebooks/readme.ipynb) to find the code to produce some of the figures below.
+
+## Data download
+
+A selection of datasets is made available for easy download and use some of the functions below:
+
+	$ rime-download --ls
+	Available datasets are:
+	  werning2024/table_output_avoided_impacts werning2024/table_output_climate_exposure werning2024/precipitation werning2024/temperature werning2024/air_pollution werning2024/energy werning2024/hydrology werning2024/land AR6-WG3-plots/spm-box1-fig1-warming-data.csv AR6-WG3-plots/spm-box1-fig1-warming-data-lhs.csv
+
+Below a simple example using [ixmp4](https://docs.ece.iiasa.ac.at/projects/ixmp4/en/latest/data-model.html) input files from AR6 WG3 scenarios with [Werning et al 2024](https://zenodo.org/records/6496232) datasets:
+
+	$ rime-download --name AR6-WG3-plots/spm-box1-fig1-warming-data-lhs.csv werning2024/table_output_climate_exposure
+
 
 
 ## Fast table emulator
@@ -76,20 +65,6 @@ And for plotting the results, e.g.:
 	region = "Countries of South Asia; primarily India"
 
 	results[(results.variable == variable) & (results.region == region)].pivot(index='year', values='value', columns=['gsat_scenario', 'gsat_model']).sort_index(axis=1).plot(ax=ax)
-
-
-## Data download
-
-A selection of datasets is made available for easy download:
-
-	$ rime-download --ls
-	Available datasets are:
-	  werning2024/table_output_avoided_impacts werning2024/table_output_climate_exposure werning2024/precipitation werning2024/temperature werning2024/air_pollution werning2024/energy werning2024/hydrology werning2024/land AR6-WG3-plots/spm-box1-fig1-warming-data.csv AR6-WG3-plots/spm-box1-fig1-warming-data-lhs.csv
-
-Below a simple example using [ixmp4](https://docs.ece.iiasa.ac.at/projects/ixmp4/en/latest/data-model.html) input files from AR6 WG3 scenarios with [Werning et al 2024](https://zenodo.org/records/6496232) datasets:
-
-	$ rime-download --name AR6-WG3-plots/spm-box1-fig1-warming-data-lhs.csv werning2024/table_output_climate_exposure
-
 
 ## Maps
 

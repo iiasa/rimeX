@@ -1,138 +1,142 @@
-# Pre-processing
+# Preprocssing
 
-Rime can handle indicator pre-processing, provided the [`config.toml` file](/README.md#config-files-and-default-parameters) is updated.
-Each indicator should provide enough metadata to be identified unequivocally on the ISIMIP database or on the local disk.
+## Define indicators
 
-## ISIMIP variables: basic climate model output
+In addition to ISIMIP variables, additional indicators can be defined in [config.toml](/rimeX/config.toml)
+See:
+(or an updated version of the file located and named according to ["config"](/docs/config.md)),
+following rules explained in ["indicators"](/docs/indicators.md).
 
-The simple direct outputs from climate models do not need any specific description. It is assumed that the data should be aggregted to monthly outputs, and that besides `variable`, the only specifers are `climate_forcing` (the ESM, e.g. "GFDL-ESM4"), `climate_scenario` (e.g. "SSP5-8.5"). If the `frequency` on the indicator should be different from `monthly`, this should be indicated (`daily` or `annual` are supported). It is possible to restrict the country averaging to only specific spatial weights for a given indicator (by default all three weight types indicated below will be processed). The variables are often expressed relatively to a baseline. This is specified via the `transform` keyword. Already implemented tranformations are `baseline_change_percent` (e.g. precipitation) and `baseline_change` (temperature). By default no transform is applied. Below is the default, with a summary of all available options commented out:
+Once specified, the corresponding indicator class can be defined, for example:
 
-```toml
-[indicator.<name>]
-frequency = "monthly"
-# frequency = "daily"
-# frequency = "annual"
-spatial_aggregation = ["latWeight", "pop2020", "gdp2020"]
-# no transform by default, alternatives are
-# transform = "baseline_change"
-# transform = "baseline_change_percent"
-# projection_baseline = ...  # indicates if differs from global defaults
-# units = ...  # write to netCDF, figures, documentation
-# comment = ... # documentation
-# title = ...  # for figures, documentation
-#
-# depends_on = [...]  # see below
-# depends_on_climatology = true
-# climatology_quantile = 0.999
-# expr = ...
-# shell = ...
-# custom = ...
-```
-
-## ISIMIP variables: derived outputs
-
-Derived outputs may have several datasets per climate model and scenario, e.g. crop or hydrological models require an additional `model` field. That should be indicated via an additional `isimip_meta` descriptor, which is provided as an additional group. Example of the Maize yield, whose name `maize_yield` does not exist on the ISIMIP database:
-
-```toml
-[indicator.maize_yield]
-frequency = "annual"
-spatial_aggregation = ["latWeight"]
-units = "%"
-
-[indicator.maize_yield.isimip_meta]
-specifiers = ["variable", "crop"]
-variable = "yieldchange"
-crop = "mai"
-ensemble_specifiers = ["model"] # further specifiers to identify the ensemble member
-```
-
-A mapping to the ISIMIP database is provided in `isimip_meta` by using `variable` and `crop` specifiers, with the values `variable="yieldchange"` and `crop="mai"`. Note lists are also accepted to select several values for those specifiers, but it is expected that only one data entry will be found after filtering with all specifiers, and will raise an error otherwise. We also want all crop models to be considered as part of our ensemble (it will be added to the default "ensemble" specifiers `climate_forcing` and `climate_scenario`). See below the precise formatting.
-
-The entries fetched from the ISIMIP database will be saved to the ISIMIP download folder (see `[isimip]` section in the config file) under a `db` subfolder.
-Later on, you might explicitly specify to read the metadata from that file instead of fetch from the internet, here `db_file = "db/maize_yield.json"`, to enforce reproductibility as the ISIMIP database is expanded. See below how that the `db_file` field can be used to create new, custom indicators.
-
-
-## Custom variables derived from ISIMIP variables
-
-Some variables may be derived from other variables. There is a machinery to do some basic transformations. Let's go through existing indicators:
-
-```toml
-[indicator.wet_bulb_temperature]
-depends_on = ["tasmax", "hurs"]
-expr = "(tasmax-273.15)*atan(0.151977*(hurs+8.313659)^0.5) + atan((tasmax-273.15)+hurs) - atan(hurs-1.676331) + 0.00391838*hurs^1.5*atan(0.023101*hurs) - 4.686035"
-```
-The `depends_on` field is essential for all derived indicators. The code will fetch the metadata for each precursor (available models, scenarios, etc) and build a database with the intersection of those. The `expr` field is passed to `cdo expr` command.
-
-A more complex example:
-
-```toml
-[indicator.extreme_daily_rainfall]
-depends_on = ["pr"]
-depends_on_climatology = true
-climatology_quantile = 0.999
-custom = "rimeX.indicators:extreme_daily_rainfall"
-```
-
-This makes use of a custom python function, here defined in a rime submodule [rimeX.indicators](/rimeX/indicators.py).
-The function is called on each time-slice file and passed the unnamed parameters (*args):
-
-- input_daily_files : list of files, must be the same length of `depends_on`
-- [clim_files] : [only if depends_on_climatology is True] netcdf files containing the climatological mean (or quantile if `climatology_quantile` is passed) calculated on-the-fly by rime, for each of the input variables, same length as `depends_on` (so far it was only used for monovariate indicators)
-- time_slice_file: the output netcdf file for this time slice
-
-and named parameters (**kwargs):
-
-- previous_input_files: input files from previous time slices (useful to **accumulate** quantities, e.g. precipitation in `rx5day`)
-- previous_output_file: output files from previous time slices
-- dry_run: don't actually do anything (if implemented in the custom function), just for developping
-
-or in a nutshell:
 ```python
-    if depends_on_climatology:
-        func(input_daily_files, clim_files, time_slice_file, **kwargs)
-    else:
-        func(input_daily_files, time_slice_file, **kwargs)
+from rime.download_isimip import Indicator
+indicator = Indicator.from_config("wet_bulb_temperature")
 ```
 
-Besides `expr` and `custom`, also implemented (but not used / tested so far) is a `shell` keyword, which is a shell command with placeholders to be formatted with `str.format()`
+The new indicators have been downloaded from the python interactive prompt, such as
+
+```python
+list(indicator.download_all())
 ```
-{inputs} : a list of input files
-{input} : joined inputs with " " separator
-{output} : the output file
-{previous_inputs} : {inputs} from the previous time slice
-{previous_input} : joined {previous_inputs} with " " separator
-{previous_output} : the first element of {previous_outputs}
-{name}
+(`list` because the function returns an iterator)
+
+or more commonly via the command line:
+
+```bash
+rime-download-isimip --indicator wet_bulb_temperarure
 ```
 
-
-## Custom indicator not downloaded from ISIMIP
-
-See the `wsi` entry in [config.toml](/rimeX/config.toml) and the corresponding [examples/wsi.json](/examples/wsi.json) db file:
-
+By default all models and all scenarios will be downloaded for the simulation round(s) selected, and according to the configuration file.
+This can be overwritten by command line arguments `--model`, `--impact-model`, `--experiment`, `--simulation-round`, which all accept several values.
+Daily files are first downloaded, then monthly averages are computed (if applicable). If disk space is scarse, or if you won't re-use the daily files for other indicators,
+you can pass `--remove-daily` for final cleanup. The files will be downloaded in the config variable `isimip.download_folder`, by default
 ```toml
-[indicator.wsi.isimip_meta]
-db_file = "examples/wsi.json"
-ensemble_specifiers = ["model"]
+[isimip]
+download_folder = "/mnt/ISIMIP"
+```
+To see complete usage information:
+
+```bash
+rime-download-isimip --help
 ```
 
-The example database contaisn a single file. The path is relative to the isimip download folder but can be also provided as absolute path.
+## Calculate regional averages
 
-```json
-[
-    {
-        "files": [{
-            "time_slice": [1980, 2100],
-            "path" : "wsi/wsi-gfdl-esm4_impact1_historical.nc"
-        }
-        ],
-        "specifiers": {
-            "climate_variable" : "wsi",
-            "climate_forcing" : "GFDL-ESM4",
-            "climate_scenario" : "ssp585",
-            "model" : "impact1",
-            "simulation_round" : "isimip3b"
-        }
-    }
-]
+To calculate regional (in general, country) averages, several regional weights can be used, either geographic (`latWeight`), population `pop2020`, GDP (`gdp2020`).
+However the paths to the masks is currently hard-coded and expected to follow a certain structure stemming from the Climate Impact Explorer.
+The only option is to specify the root path
 ```
+[preprocessing.regional]
+weights = [ "latWeight", "gdp2020", "pop2020"]
+masks_folder = "/mnt/PROVIDE/climate_impact_explorer/data/masks"
+```
+and the masks will be looked in `f"{masks_folder}/{region}/masks/{region}_360x720lat89p75to-89p75lon-179p75to179p75_{weights}.nc4"`
+At the time of writing, the masks files are extracts from a 0.5 degree grid as suggested by the file name, but restricted to the bounding
+box for the specific region. The indicator data is re-indexed to match that grid (in the pandas / xarray sense).
+Note the indicator data is not currently interpolated, so the mask and indicator files should
+be defined on that same grid or the re-indexing will yield NaNs. The mask netcdf dataset can have several variables, which correspond to subregions.
+E.g for Italy, the region will be `ITA`, and the netCDF will contain
+one `ITA` variable for the whole country, and then other variables for the Italian regions.
+
+```bash
+rime-pre-region --indicator wet_bulb_temperature --weights latWeight gdp2020 pop2020 --region ITA DEU
+```
+
+The regional averages are written according to the config variable `indicators.folder`, by default
+```toml
+[indicators]
+folder="/mnt/ISIMIP/indicators"
+```
+
+## Prepare the warming level table
+
+The next step is to compute global-mean `tas` and scan all available simulations to be binned into warming levels.
+This is achieved with the commands `rime-pre-gmt` and `rime-pre-wl`, respectively.
+
+The warming level file is saved under the folder specified by `isimip.climate_impact_explorer`, by default:
+```toml
+[isimip]
+climate_impact_explorer = "/mnt/PROVIDE/climate_impact_explorer"
+```
+then a specific subfolder name is built based on the selected options `preprocessing.running_mean_window` (default=21), `isimip.simulation_round` and `preprocessing.tag`, if any.
+
+Full options available with:
+
+```bash
+rime-pre-gmt --help   # calculate global mean temperature
+rime-pre-wl --help    # prepare the warming level table
+```
+
+
+## Quantile maps
+
+The recommended approach is to combine regional averages with warming level tables is to use quantile maps.
+
+![Quantile map](/docs/quantilemap.png)
+
+Quantile maps are 2-D (+ any other dimensions) arrays
+indexed by warming levels and quantiles, i.e. describing the probability distribution of the indicator for each warming level.
+Because of the structure of netCDF datasets and corresponding xarray calculations, the quantile maps can have any trailing dimensions
+such as geographical coordinates (maps) or regions or/and their administrative boundaries.
+
+A command `rime-pre-quantilemap` is available to produce the quantile maps. Three kinds of outputs are available:
+- `--regional` : create one netcdf file per region, that includes all administrative sub-regions
+```bash
+rime-pre-quantilemap --region ITA --season annual summer winter spring autumn --regional--quantile-bins 101 --weights latWeight gdp2020 pop2020
+```
+- `--regional-no-admin` : create one netcdf file that includes all regions, without adminsitritive sub-regions
+```bash
+rime-pre-quantilemap --season annual summer winter spring autumn --regional-no-admin --quantile-bins 101 --weights latWeight gdp2020 pop2020
+```
+- `--map` : create one netCDF file with geographical coordianates (lon/lat grid points), covering the whole world.
+```bash
+rime-pre-quantilemap --season annual summer winter spring autumn --map --map-chunk-size 60 --quantile-bins 11 --warming-levels 1.5 2 2.5 3 3.5 4
+```
+The latter, map output, is quite large and generally used for illustrative purpose only,
+so we generally limit the number of quantiles and warming levels to keep memory usage in check. An odd quantile bin number includes the median.
+The main warming level file will be loaded and only the required warming levels are selected.
+
+The defaults are provided as in the config file as:
+```toml
+[preprocessing]
+warming_level_step = 0.1  # used for pre-processing (input files for emulator)
+warming_level_min = 1
+running_mean_window = 21
+isimip_binned_backend = [ "csv", ] # "feather" and "parquet" are also available
+projection_baseline = [ 1995, 2014,] # this is used in rime-preproc-digitize
+quantilemap_quantile_bins = 101
+```
+
+Full documentation available at:
+
+```bash
+rime-pre-quantilemap --help
+```
+
+## Deprecated
+
+The `rime-pre-digitize` command is an alternative pre-processing step
+that counts all data points in the warming level bins and write them to a CSV file.
+This is an optional pre-processing step for the `rime-run-timeseries` command.
+That command is deprecated and eventually `rime-run-timeseries` will be based on quantile maps.
