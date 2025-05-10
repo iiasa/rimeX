@@ -93,7 +93,7 @@ rime-pre-wl --help    # prepare the warming level table
 
 The recommended approach is to combine regional averages with warming level tables is to use quantile maps.
 
-![Quantile map](/docs/quantilemap.png)
+![Quantile map](https://github.com/user-attachments/assets/d267fcbf-5c5d-47e6-931e-9e217eb1dcf9)
 
 Quantile maps are 2-D (+ any other dimensions) arrays
 indexed by warming levels and quantiles, i.e. describing the probability distribution of the indicator for each warming level.
