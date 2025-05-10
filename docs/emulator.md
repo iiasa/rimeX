@@ -5,7 +5,8 @@
 An extensive command-line interface was developped with the objective of back-compatibility with the original `rime` in mind,
 and is documented in the [run](/docs/run.md) section. However, this currently does not rely on the quantile map approach.
 
-The recommended usage of `rime` is now via the quantile maps, which is not yet integrated into the `rime-run-...` commands (it will be eventually).
+The recommended usage of `rime` is now via the quantile maps, which is not yet integrated into the `rime-run-...` commands (it might be, eventually).
+Fortunately, the results are very similar, since they only differ with respect to how the sampling is performed (counting vs monte carlo sampling, interpolation across warming levels...).
 
 ## Quantile maps
 
