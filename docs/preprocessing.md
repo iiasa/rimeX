@@ -1,4 +1,4 @@
-# Preprocssing
+# Preprocessing
 
 ## Define indicators
 
@@ -133,6 +133,8 @@ Full documentation available at:
 ```bash
 rime-pre-quantilemap --help
 ```
+
+See [emulator](/docs/emulator.md) for how to use these maps.
 
 ## Deprecated
 
