@@ -47,6 +47,8 @@ Here is an index of the documentation:
 	- [run](/docs/run.md) : command-line interface to run the emulator (EXPERIMENTAL) -- does not include quantile maps
 
 
+![Quantile maps](/docs/quantilemap.png)
+
 ### Command Line Interface
 
 The following scripts are made available, for which inline help is available with `-h` or `--help`:
