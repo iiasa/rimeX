@@ -40,11 +40,11 @@ The `rimeX` package contains relatively distinct functionality, which can be spl
 Much of it has a command-line interface, with the notable exception of the latest quantile maps, which is only implemented as python API (see below).
 Here is an index of the documentation:
 
-- [/docs/config.md] : write your own, discoverable config.toml file
-- [/docs/preprocessing.md] : how to define new indicators, calculate regional averages, global mean and prepare emulator data (quantile maps)
-	- [/docs/indicators.md] : update the config.toml file for new indicators
-- [/docs/emulator.md] : use the emulator
-	- [/docs/run.md] : command-line interface to run the emulator (EXPERIMENTAL) -- does not include quantile maps
+- [config](/docs/config.md) : how to have your own, discoverable config.toml file
+- [preprocessing](/docs/preprocessing.md) : how to define new indicators, calculate regional averages, global mean and prepare emulator data (quantile maps)
+	- [indicators](/docs/indicators.md) : update the config.toml file for new indicators
+- [emulator](/docs/emulator.md) : use the emulator
+	- [run](/docs/run.md) : command-line interface to run the emulator (EXPERIMENTAL) -- does not include quantile maps
 
 
 ### Command Line Interface
