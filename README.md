@@ -19,7 +19,7 @@ It is possible to import via `import rimeX.legacy as rime` to use existing code.
 A development install can be done after cloning the repo, in pip-editable `-e` mode (that way code edits will propagate without the need for re-installing):
 
 	git clone https://github.com/iiasa/rimeX.git
-	cd rime
+	cd rimeX
 	pip install -e .
 
 For the end-user (we're not at this stage yet) or one-off testing,
