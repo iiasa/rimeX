@@ -18,21 +18,42 @@ It is possible to import via `import rimeX.legacy as rime` to use existing code.
 
 A development install can be done after cloning the repo, in pip-editable `-e` mode (that way code edits will propagate without the need for re-installing):
 
-	git clone https://github.com/iiasa/rimeX.git
-	cd rimeX
-	pip install -e .
+```bash
+git clone https://github.com/iiasa/rimeX.git
+cd rimeX
+pip install -e .
+```
 
-For the end-user (we're not at this stage yet) or one-off testing,
-it's also possible to do it in one go with pip, but the whole repo is cloned in the background so it's slower.
+If you need to run the **optional preprocessing yourself**, you also need to install **CDO**.
+This can be done system-wide (e.g. using `apt-get` or `brew`) or via conda:
+
+```bash
+conda install -c conda-forge cdo
+```
+
+For the end-user (we're not at this stage yet) or one-off testing, it's also possible to do it in one go with pip, but the whole repo is cloned in the background so it's slower.
 The command is shown below for completeness, but it is not recommended (slower and no edits possible):
 
- 	pip install git+https://github.com/iiasa/rimeX.git
-
+```bash
+pip install git+https://github.com/iiasa/rimeX.git
+```
 
 To install all optional dependencies, append `[all]`, e.g. from the local clone:
 
-	pip install -e .[all]
+```bash
+pip install -e .[all]
+```
 
+### Conda installation (alternative)
+
+If you prefer using conda, you can create an environment and install dependencies as follows:
+
+```bash
+conda create -n rimex-env python=3.10
+conda activate rimex-env
+conda install -c conda-forge cdo
+pip install -e 
+```
 
 ## Usage
 
