@@ -59,7 +59,8 @@ If you prefer using conda, you can create an environment and install dependencie
 conda create -n rimex-env python=3.10
 conda activate rimex-env
 conda install -c conda-forge cdo
-pip install -e 
+cd rimeX
+pip install -e .
 ```
 
 ## Usage
