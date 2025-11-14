@@ -28,6 +28,13 @@ If you need to run the **optional preprocessing yourself**, you also need to ins
 This can be done system-wide (e.g. using `apt-get` or `brew`) or via conda:
 
 ```bash
+# Linux
+sudo apt-get install cdo
+
+# macOS
+brew install cdo
+
+# Or using conda (works everywhere)
 conda install -c conda-forge cdo
 ```
 
