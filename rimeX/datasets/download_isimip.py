@@ -308,14 +308,25 @@ class ISIMIPDataBase:
     def load(cls, db_file, download_folder=None):
         return load_db_from_file(db_file, download_folder)
 
+    def _convert_paths(self, obj):
+        if isinstance(obj, dict):
+            return {key: self._convert_paths(value) for key, value in obj.items()}
+        elif isinstance(obj, list):
+            return [self._convert_paths(item) for item in obj]
+        elif isinstance(obj, Path):
+            return str(obj)  # Convert any Path object to a string
+        else:
+            return obj  # Return other types unchanged
+
     def to_json(self, filename, folder=None):
         import json
         folder = folder or Path(self.download_folder)/"db"
         filepath = Path(folder) / filename
         filepath.parent.mkdir(parents=True, exist_ok=True)
         logger.info(f"Saving {len(self.db)} database entries to {filepath}")
+        db_serializable = self._convert_paths(self.db)
         with open(filepath, "w") as f:
-            json.dump(self.db, f)
+            json.dump(db_serializable, f)
 
 def _are_consecutive_time_slices(time_slices):
     return all(t2[0] == t1[1]+1 for t1, t2 in zip(time_slices[:-1], time_slices[1:]))
