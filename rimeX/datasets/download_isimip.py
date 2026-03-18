@@ -575,7 +575,7 @@ class Indicator(GenericIndicator):
                 indicator.download("historical", climate_forcing, dry_run=dry_run, cat=cat, output_file=filepath, **ensemble_specifiers)
             yield filepath
 
-    def download(self, climate_scenario, climate_forcing, time_slice=None, overwrite=False, remove_daily=False, remove_daily_expr=True,
+    def download(self, climate_scenario, climate_forcing, time_slice=None, overwrite=False, remove_daily=False, remove_daily_expr=False,
                  cat=None, output_file=None,
                  dry_run=False, **ensemble_specifiers):
         """Download a set of files from the ISIMIP database and returns an iterator on the local file paths (normally over time slices)
@@ -601,11 +601,12 @@ class Indicator(GenericIndicator):
                 temporary_files.add(str(f))
 
         def _cleanup(excludes=[]):
+            
             # clean up the temporary files if any, to save disk space
             while len(temporary_files) > 0:
                 tmp = temporary_files.pop()
-                if Path(tmp).exists() and str(tmp) not in map(str, excludes):
-                    check_call(f"rm '{tmp}'", dry_run=dry_run)
+            #    if Path(tmp).exists() and str(tmp) not in map(str, excludes):
+            #        check_call(f"rm '{tmp}'", dry_run=dry_run)
 
 
         time_slices = [f['time_slice'] for f in results[0]['files']]
