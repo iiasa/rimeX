@@ -103,7 +103,7 @@ def make_quantile_map_array(indicator:Indicator, warming_levels:pd.DataFrame,
 
     simulations = indicator.simulations
     all_experiments = sorted(set(simu["climate_scenario"] for simu in simulations))
-    w = running_mean_window // 2
+    w = running_mean_window // 2 if running_mean_window // 2 >= 1 else 1#w = running_mean_window // 2
     quants = np.linspace(0, 1, quantile_bins)
 
     if warming_level_simulation_key is None:
@@ -301,7 +301,65 @@ def get_filepath(name, season="annual", root_dir=None, suffix="", region=None, r
     else:
         return root_dir / "quantilemaps" / name / f"{name}_{season}_quantilemaps{suffix}.nc"
 
+def make_timesensitive_quantilemap_prediction(quantile_maps, gmt, region, indicator, samples=100, seed=42, quantiles=[0.5, .05, .95], mode="deterministic", clip=False, skipna=False):
+    """Make a prediction form the quantile map for a given global mean temperature using different quantile_maps per year. You can use this function to account for e.g. timesensitive weighting schemes in your emulation appearing when socioeconomic conditions change
 
+    Parameters
+    ----------
+    quantile_maps : dictionary with all years as keys and paths to xa.DataArrays produced by make_quantile_map_array as values.
+
+    gmt : pandas DataFrame for the global mean temperature, with years as index and ensemble members as columns
+
+    region: string, region to make the prediction for
+
+    indicator: string, indicator to make the prediction for
+
+    samples : number of samples to draw (default: 100)
+
+    seed : random seed
+
+    quantiles : quantiles to compute (default: [0.5, .05, .95])
+        if None, all ensemble members are returned
+
+    mode : {"deterministic", "factorial", "montecarlo"}
+        - "deterministic" (the default): gmt is resampled deterministically
+        - "montecarlo" : gmt is simply resampled (may speed-up the computation at the cost of some loss of precision)
+        - "factorial" : gmt is combined with the quantile map in a factorial way
+            The total number of samples is then samples * gmt.shape[1]
+        Note the impact distribution is always resampled in a deterministic way
+
+    clip : bool
+        if True, clip the GMT data to the range of the quantile map, otherwise fill with NaNs
+        False by default
+
+    skipna : bool
+        if True, skip NaN values in the quantiles calculation (default: False)
+        can be useful if clip is set to False
+
+    Returns
+    -------
+    sampled_maps : xa.DataArray with dimensions year, sample
+    """
+    predictions = []
+    
+    for year, quantile_map_path in quantile_maps.items():
+        
+        relevant_gmt = gmt.loc[[year]]
+        
+        with xa.open_dataset(quantile_map_path) as ds:
+            relevant_quantile_map = ds[indicator].sel(region=region).load()
+        
+        prediction = make_quantilemap_prediction(relevant_quantile_map, relevant_gmt, samples=samples, seed=seed, quantiles=quantiles, mode=mode, clip=clip, skipna=skipna)
+        
+        predictions.append(prediction)
+
+    sampled_maps = xa.concat(predictions, dim = 'year')
+    
+    return sampled_maps
+        
+
+
+    
 def make_quantilemap_prediction(a, gmt, samples=100, seed=42, quantiles=[0.5, .05, .95], mode="deterministic", clip=False, skipna=False):
     """Make a prediction of the quantile map for a given global mean temperature
 
