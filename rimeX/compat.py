@@ -8,6 +8,11 @@ from rimeX.logs import logger
 from rimeX.datasets import get_datapath
 from rimeX.config import CONFIG
 
+# At the top of compat.py, or inline where needed
+def _annual_freq():
+    major, minor = (int(x) for x in pd.__version__.split('.')[:2])
+    return 'YE' if (major, minor) >= (2, 2) else 'A'
+
 def read_table(file, backend=None, index=None, **kwargs):
     logger.info(f"Read {file}")
     if backend == "feather" or str(file).endswith((".ftr", ".feather")):
@@ -532,7 +537,7 @@ def _open_dataset(func, file, **kwargs):
         ds = func(file, decode_times=False, **kwargs)
         if ds["time"].units.startswith("years since"):
             firstyear = int(ds["time"].units[len("years since "):].split("-")[0])
-            ds["time"] = pd.date_range(start=f"{ds['time'].values[0]+firstyear}", periods=ds["time"].size, freq='A')
+            ds["time"] = pd.date_range(start=f"{ds['time'].values[0]+firstyear}", periods=ds["time"].size, freq=_annual_freq())
         else:
             logger.warning(f"Cannot decode time: {file}")
             raise
