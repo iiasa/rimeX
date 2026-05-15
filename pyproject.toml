@@ -44,6 +44,8 @@ all = [
     "cartopy",
     "geoviews",
     "pyproj",
+    # rimeX.postproc.lifetime_exposure:
+    "openpyxl",
 ]
 
 [tool.setuptools.packages.find]
