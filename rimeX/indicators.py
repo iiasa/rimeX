@@ -253,3 +253,13 @@ def extreme_daily_rainfall(input_files, climatology_files, output_file, dry_run=
     check_call(f"ncatted -O -a standard_name,{name},o,c,'extreme_daily_rainfall' {output_file}", dry_run=dry_run)
     check_call(f"ncatted -O -a long_name,{name},o,c,'Extreme daily rainfall' {output_file}", dry_run=dry_run)
     check_call(f"ncatted -O -a desc,{name},o,c,'Annual precipitation above the historical 99.9th percentile' {output_file}", dry_run=dry_run)
+
+def temp_annual_max_degree_over_20(input_files, output_file, **kw):
+    """ annual max temperature minus 20 degrees
+    """
+    import xarray as xa
+
+    assert len(input_files) == 1
+    ds = xa.open_dataset(input_files[0])
+    result = (ds['temp-annual-max'] - 20).to_dataset(name='temp_annual_max_degree_over_20')
+    result.to_netcdf(output_file)

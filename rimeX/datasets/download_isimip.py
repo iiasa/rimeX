@@ -773,6 +773,23 @@ class Indicator(GenericIndicator):
         for simu in self.simulations:
             yield self.download(**simu, **kwargs)
 
+    def run_download(self, **kwargs):
+        """Like download_all, but eagerly executes all downloads (instead of
+        returning a lazy generator) and prints progress along the way.
+        """
+        simulations = self.simulations
+        n = len(simulations)
+        paths = []
+
+        for i, simu in enumerate(simulations, 1):
+            logger.info(f"[{i}/{n}] {self.name}: downloading {simu} ...")
+            path = self.download(**simu, **kwargs)
+            logger.info(f"[{i}/{n}] {self.name}: done -> {path}")
+            paths.append(path)
+
+        logger.info(f"{self.name}: all {n} simulations processed.")
+        return paths
+
     def get_all_paths(self, filter=None, **kwargs):
         for simu in self.simulations:
             if filter is not None:
@@ -807,7 +824,6 @@ def main():
         parser.print_help()
         parser.exit(1)
 
-    print("model", o.model)
     print("experiment", o.experiment)
 
     if o.indicator:

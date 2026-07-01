@@ -50,10 +50,17 @@ def get_coords(res=0.5):
     return lon, lat
 
 
+#def get_mask_file(region, weights, masks_folder=None):
+#    if masks_folder is None: masks_folder = CONFIG["preprocessing.regional.masks_folder"]
+#    return Path(masks_folder) / f"{region}/masks/{region}_360x720lat89p75to-89p75lon-179p75to179p75_{weights}.nc4"
 def get_mask_file(region, weights, masks_folder=None):
-    if masks_folder is None: masks_folder = CONFIG["preprocessing.regional.masks_folder"]
-    return Path(masks_folder) / f"{region}/masks/{region}_360x720lat89p75to-89p75lon-179p75to179p75_{weights}.nc4"
-
+    if masks_folder is None:
+        masks_folder = CONFIG["preprocessing.regional.masks_folder"]
+    matches = glob.glob(str(Path(masks_folder) / region / "masks" / f"{region}_*_{weights}.nc4"))
+    if not matches:
+        raise FileNotFoundError(f"No mask file found for region={region}, weights={weights}")
+    return Path(matches[0])
+    
 def open_region_mask(region, weights, masks_folder=None):
     """return DataArray mask from a subregion"""
     path = get_mask_file(region, weights, masks_folder)
@@ -69,11 +76,12 @@ def get_region_masks(region, weights, masks_folder=None):
 def get_all_regions():
     return sorted(o.name for o in Path(CONFIG["preprocessing.regional.masks_folder"]).glob("*") if not dir_is_empty(o) and not dir_is_empty(o / "masks"))
 
-def _regional_average(v, mask):
+def _regional_average(v, mask, aggregation_type = "mean"):
     """Country averages
 
     v: numpy array with last dims (..., lat, lon)
     mask: numpy array defined on the same grid as v
+    aggregation_type: string indicating the spatial aggregation applied to grid points within a region. "sum" computes the sum over all grid points, while "mean" computes their arithmetic average.
 
     Returns a numpy array
     """
@@ -88,14 +96,27 @@ def _regional_average(v, mask):
         logger.debug(f"no valid data")
 
     weights = mask[m]
-    return (v[..., m] * weights).sum(axis=-1) / weights.sum()
+
+    if aggregation_type == "mean":
+        return (v[..., m] * weights).sum(axis=-1) / weights.sum()
+    elif aggregation_type == "sum":
+        return (v[..., m] * weights).sum(axis=-1)
+    
+    #if aggregation_type == "sum":
+    #    out = (v[..., m] * weights).sum(axis=-1)
+    #elif aggregation_type == "mean":
+    #    out = (v[..., m] * weights).sum(axis=-1) / weights.sum()
+
+    # Make sure shape is (..., 1)
+    #return np.expand_dims(out, axis=-1)
 
 
-def _calc_regional_averages_unfiltered(v, ds_mask, name=None, reindex=True):
+def _calc_regional_averages_unfiltered(v, ds_mask, aggregation_type = "mean", name=None, reindex=True):
     """Transform a DataArray time x lat x lon into a time x region dataset
 
     v : xarray.DataArray (will be reindexed onto ds_mask)
     ds_mask : xarray.Dataset of binary masks (the regions)
+    aggregation_type: string indicating the spatial aggregation applied to grid points within a region. "sum" computes the sum over all grid points, while "mean" computes their arithmetic average.
     """
     assert v.dims == ("time", "lat", "lon") # no need to be more general here
 
@@ -118,26 +139,27 @@ def _calc_regional_averages_unfiltered(v, ds_mask, name=None, reindex=True):
         for j, k in enumerate(subregions):
             mask = ds_mask[k].values
             for i in range(v.shape[0]):
-                a[i:i+1, j] = _regional_average(v.values[i:i+1], mask)
+                a[i:i+1, j] = _regional_average(v.values[i:i+1], mask, aggregation_type = aggregation_type)
         return xa.DataArray(a, name=name, dims=("time", "region"), coords={"time": v.time, "region": subregions})
 
     return xa.DataArray(
-        np.array([_regional_average(v.values, ds_mask[k].values) for k in subregions]).T,
+        np.array([_regional_average(v.values, ds_mask[k].values, aggregation_type = aggregation_type) for k in subregions]).T,
         name=name, dims=("time", "region"), coords={"time": v.time, "region": subregions})
 
 
-def calc_regional_averages(v, ds_mask, name=None, **kwargs):
+def calc_regional_averages(v, ds_mask, aggregation_type = "mean", name=None, **kwargs):
     """Transform a DataArray time x lat x lon into a time x region dataset
 
     v : xarray.DataArray (will be reindexed onto ds_mask)
     ds_mask : xarray.Dataset of binary masks (the regions)
+    aggregation_type: string indicating the spatial aggregation applied to grid points within a region. "sum" computes the sum over all grid points, while "mean" computes their arithmetic average.
     """
     # silence some warnings that may occur
     with warnings.catch_warnings():
         warnings.filterwarnings('ignore', r'invalid value encountered in divide')
         warnings.filterwarnings('ignore', r'invalid value encountered in scalar divide')
 
-        return _calc_regional_averages_unfiltered(v, ds_mask, name=name, **kwargs)
+        return _calc_regional_averages_unfiltered(v, ds_mask, aggregation_type = aggregation_type, name=name, **kwargs)
 
 
 def get_all_subregion(region, weights="latWeight"):
@@ -160,6 +182,7 @@ def _crunch_regional_averages(indicator, simu, o, write_merged_regional_averages
             for weights in o.weights
                 if get_mask_file(region, weights).exists()
                     and (o.overwrite or not _check_file(indicator.get_path(**simu, region=region, regional_weight=weights)))]
+    
                             # and (o.overwrite or not get_regional_averages_file(variable, model, experiment, region, weights, impact_model=impact_model).exists())]
 
     # also consider merged files
@@ -184,9 +207,10 @@ def _crunch_regional_averages(indicator, simu, o, write_merged_regional_averages
 
     # calculate regional averages including admin boundaries
     if todo:
+  
         with indicator.open_simulation(**simu) as v:
             v = v.load()
-
+      
         for weight in o.weights:
             for region in o.region:
 
@@ -200,7 +224,8 @@ def _crunch_regional_averages(indicator, simu, o, write_merged_regional_averages
                     continue
 
                 # keep the same netCDF name as the original file, for consistency with lat/lon file
-                res = calc_regional_averages(v, mask, name=indicator.ncvar)
+                res = calc_regional_averages(v, mask, aggregation_type = o.aggregation_type, name=indicator.ncvar)
+                
 
                 # write to CSV
                 ofile_csv.parent.mkdir(exist_ok=True, parents=True)
@@ -243,14 +268,125 @@ def _crunch_regional_averages(indicator, simu, o, write_merged_regional_averages
             # clean-up memory
             del data
 
+def run_regional_averages(indicator, aggregation_type="mean", overwrite=False, frequency=None,
+                           region=None, weights=None, cpus=None,
+                           model=None, experiment=None, impact_model=None,
+                           write_merged_regional_averages=True):
+    """Compute regional averages for one or more indicators.
 
+    Importable equivalent of the `rime-regional-averages` CLI tool -- call this
+    directly from a notebook instead of shelling out to the command line.
+
+    Parameters
+    ----------
+    indicator : list[str]
+        Indicator name(s) to process, e.g. ["heating-degree-days"]
+    aggregation_type : {"mean", "sum"}
+        Spatial aggregation applied to grid points within a region.
+    overwrite : bool
+        Recompute and overwrite existing regional-average files.
+    frequency : str, optional
+        Reserved, unused in the current pipeline.
+    region : list[str], optional
+        Regions to process. Defaults to all regions found under `preprocessing.regional.masks_folder`.
+    weights : list[str], optional
+        Regional weighting schemes to use. Defaults to `preprocessing.regional.weights`.
+    cpus : int, optional
+        Number of worker processes to run in parallel. Defaults to sequential execution.
+    model, experiment, impact_model : str or list[str], optional
+        Filter simulations by climate model / experiment / impact model. None matches everything.
+    write_merged_regional_averages : bool
+        Whether to also write one combined CSV per (indicator, simulation, weight) merging all regions.
+    """
+    all_regions = get_all_regions()
+
+    if region is None:
+        region = all_regions
+    if weights is None:
+        weights = CONFIG["preprocessing.regional.weights"]
+
+    if list(region) != list(all_regions):
+        logger.warning("Skip writing the summary netCDF file with all country averages because "
+                        "the required regions are different from the default")
+        write_merged_regional_averages = False
+
+    o = argparse.Namespace(region=region, weights=weights, aggregation_type=aggregation_type,
+                            overwrite=overwrite, frequency=frequency,
+                            model=model, experiment=experiment, impact_model=impact_model)
+
+    def iterator():
+        for variable in indicator:
+            ind = Indicator.from_config(variable)
+            logger.info(f"Found {len(ind.simulations)} simulations for {variable}")
+            indicator_simus = []
+            for simu in ind.simulations:
+                if not _matches(simu["climate_forcing"], o.model):
+                    continue
+                if not _matches(simu["climate_scenario"], o.experiment):
+                    continue
+                if not _matches(simu.get("model"), o.impact_model):
+                    continue
+                indicator_simus.append((ind, simu))
+            logger.info(f"After filtering, {len(indicator_simus)} simulations remain for {variable}")
+            yield from indicator_simus
+
+    all_items = list(iterator())
+
+    if cpus is not None:
+        cpus = min(cpus, len(all_items))
+
+    if cpus and cpus > 1:
+        pool = concurrent.futures.ProcessPoolExecutor(max_workers=cpus)
+    else:
+        pool = argparse.Namespace(submit=lambda f, *args, **kwargs: f(*args, **kwargs))
+
+    jobs = [pool.submit(_crunch_regional_averages, ind, simu, o,
+                         write_merged_regional_averages=write_merged_regional_averages)
+            for ind, simu in all_items]
+
+    for job in tqdm.tqdm(jobs):
+        if job is not None:
+            job.result()
+
+
+def main():
+    ALL_REGIONS = get_all_regions()
+    all_variables = list(CONFIG["isimip.variables"]) + sorted(set(v.split(".")[0] for v in CONFIG["indicator"]))
+    parser = argparse.ArgumentParser(epilog="", formatter_class=argparse.RawDescriptionHelpFormatter,
+                                      parents=[log_parser, config_parser, isimip_parser])
+    parser.add_argument("-i", "--indicator", nargs='+', default=[], choices=all_variables,
+                         help="includes additional, secondary indicator with specific monthly statistics")
+    parser.add_argument("-a", "--aggregation_type", default="mean", choices=["mean", "sum"],
+                         help="spatial aggregation applied to grid points within a region")
+    parser.add_argument("--overwrite", action='store_true')
+    parser.add_argument("--frequency")
+    group = parser.add_argument_group('mask')
+    group.add_argument("--region", nargs='+', default=ALL_REGIONS, choices=ALL_REGIONS)
+    group.add_argument("--weights", nargs='+', default=CONFIG["preprocessing.regional.weights"],
+                        choices=CONFIG["preprocessing.regional.weights"])
+    group.add_argument("--cpus", type=int)
+
+    o = parser.parse_args()
+    setup_logger(o)
+
+    run_regional_averages(indicator=o.indicator, aggregation_type=o.aggregation_type,
+                           overwrite=o.overwrite, frequency=o.frequency,
+                           region=o.region, weights=o.weights, cpus=o.cpus,
+                           model=o.model, experiment=o.experiment, impact_model=o.impact_model)
+
+
+if __name__ == "__main__":
+    main()
+'''
 def main():
 
     ALL_REGIONS = get_all_regions()
+    print(ALL_REGIONS)
     all_variables = list(CONFIG["isimip.variables"]) + sorted(set(v.split(".")[0] for v in CONFIG["indicator"]))
     parser = argparse.ArgumentParser(epilog="""""", formatter_class=argparse.RawDescriptionHelpFormatter, parents=[log_parser, config_parser, isimip_parser])
     # parser.add_argument("-v", "--variable", nargs='+', default=[], choices=CONFIG["isimip.variables"])
     parser.add_argument("-i", "--indicator", nargs='+', default=[], choices=all_variables, help="includes additional, secondary indicator with specific monthly statistics")
+    parser.add_argument("-a", "--aggregation_type", default="mean", choices=["mean","sum"], help="string indicating the spatial aggregation applied to grid points within a region. sum computes the sum over all grid points, while mean computes their arithmetic average.")
     parser.add_argument("--overwrite", action='store_true')
     # parser.add_argument("--backends", nargs="+", choices=["csv", "netcdf"], default=["netcdf", "csv"])
     parser.add_argument("--frequency")
@@ -266,6 +402,7 @@ def main():
     if list(o.region) != list(get_all_regions()):
         logger.warning("Skip writing the summary netCDF file with all country averages because the required regions are different from the default")
         write_merged_regional_averages = False
+   
 
     def iterator():
 
@@ -314,3 +451,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+'''
