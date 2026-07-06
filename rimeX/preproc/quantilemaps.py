@@ -9,7 +9,7 @@ import numpy as np
 from scipy.interpolate import RegularGridInterpolator
 import pandas as pd
 import xarray as xa
-
+import argparse
 from rimeX.config import CONFIG, config_parser
 from rimeX.logs import logger, log_parser
 from rimeX.stats import fast_quantile, fast_weighted_quantile, equally_spaced_quantiles
@@ -17,6 +17,36 @@ from rimeX.datasets.download_isimip import Indicator
 from rimeX.preproc.warminglevels import get_warming_level_file, get_root_directory
 from rimeX.preproc.digitize import transform_indicator
 from rimeX.preproc.regional_average import get_all_regions
+
+def load_GMT_ensemble(file, projection_baseline=None, projection_baseline_offset=None):
+    """Read a GMT ensemble file (e.g. MAGICC output, comma- or whitespace-separated)
+    as a pandas DataFrame.
+
+    By default expresses values w.r.t. pre-industrial levels, adjusted with
+    observations around the projection baseline.
+    """
+    logger.info(f"Load GMT ensemble {file} with baseline {projection_baseline} and offset {projection_baseline_offset}")
+
+    with open(file) as f:
+        for i, line in enumerate(f):
+            if line.strip().lower().startswith("time"):
+                header_row = i
+                break
+        else:
+            raise ValueError(f"Could not find a header row starting with 'time' in {file}")
+
+    # sep=None + engine="python" lets pandas auto-detect the delimiter
+    # (comma, whitespace, etc.) instead of assuming one
+    df = pd.read_csv(file, skiprows=header_row, sep=None, engine="python", index_col=0)
+    df.index = df.index.astype(int)
+
+    if projection_baseline is not None:
+        y1, y2 = projection_baseline
+        df -= df.loc[y1:y2].mean()
+        if projection_baseline_offset is not None:
+            df += projection_baseline_offset
+
+    return df
 
 def catchwarnings(func):
     def wrapped(*args, **kwargs):
@@ -466,7 +496,7 @@ def _loop(o, indicator, warming_levels, season, mode, open_func_kwargs, filepath
     except Exception as error:
         if mode == "regional":
             logger.warning(error)
-            logger.warning(f"Failed to process {indicator.name} | {open_func_kwargs['regions']}")
+            logger.warning(f"Failed to process {indicator.name}")
             # raise
             return
         raise
@@ -476,7 +506,222 @@ def _loop(o, indicator, warming_levels, season, mode, open_func_kwargs, filepath
     encoding = {array.name: {'zlib': True}}
     array.to_netcdf(filepath, encoding=encoding)
 
+def make_quantilemaps(indicator, season=None, warming_level_file=None, warming_levels=None,
+                       quantile_bins=None, running_mean_window=None, equiprobable_climate_models=True,
+                       simulation_round=None, projection_baseline=None, skip_transform=False,
+                       regional=False, regional_no_admin=False, map=False, map_chunk_size=None,
+                       weight="latWeight", region=None, overwrite=False, suffix="", auto_suffix=True,
+                       skip_nans=False, cpus=None):
+    """Compute quantile maps for one or more indicators.
 
+    Importable equivalent of the `rime-preproc-quantilemaps` CLI tool -- call this
+    directly from a notebook instead of shelling out to the command line.
+
+    Parameters
+    ----------
+    indicator : str or list[str]
+        Indicator name(s) to process, e.g. "heating-degree-days" or ["tas", "pr"]
+    season : str or list[str], optional
+        Season(s) to process (e.g. "annual", "summer"). Defaults to all seasons in `preprocessing.seasons`.
+        Ignored (skipped) for indicators with `frequency == "annual"` unless season == "annual".
+    warming_level_file : str, optional
+        Path to the warming levels CSV. Defaults to the file resolved by `get_warming_level_file`.
+    warming_levels : list[float], optional
+        Subset of warming levels to process. Defaults to all warming levels in the file.
+    quantile_bins : int, optional
+        Number of quantile bins. Defaults to `preprocessing.quantilemap_quantile_bins`.
+    running_mean_window : int, optional
+        Running-mean window size (years). Defaults to `preprocessing.running_mean_window`.
+    equiprobable_climate_models : bool
+        Downweight models that appear more often in the warming-level selection, so every model
+        contributes equally to each warming-level bin. Default True.
+    simulation_round : list[str], optional
+        ISIMIP simulation round(s) to use. Defaults to `isimip.simulation_round`.
+    projection_baseline : (int, int), optional
+        Baseline period for the indicator transform. Defaults to `preprocessing.projection_baseline`.
+    skip_transform : bool
+        If True, use the indicator's absolute values instead of its baseline-relative transform.
+    regional : bool
+        Write one file per region, including admin boundaries.
+    regional_no_admin : bool
+        Write a single merged file across all regions (no admin boundaries).
+    map : bool
+        Write lat/lon gridded quantile maps.
+    map_chunk_size : int, optional
+        Process lat/lon maps in latitude chunks of this size, to limit memory usage.
+    weight : str
+        Regional weighting scheme to use for `regional`/`regional_no_admin` modes. Default "latWeight".
+    region : list[str], optional
+        Regions to process for `regional` mode. Defaults to all regions found via `get_all_regions()`.
+    overwrite : bool
+        Recompute and overwrite existing output files.
+    suffix : str
+        Suffix appended to output filenames.
+    auto_suffix : bool
+        Automatically extend `suffix` to reflect any non-default processing options used.
+    skip_nans : bool
+        Skip NaN values when computing quantiles.
+    cpus : int, optional
+        Number of parallel worker processes (used when processing multiple regions/files at once).
+
+    Returns
+    -------
+    list[Path]
+        Paths of all output files that were (or would have been) written.
+    """
+    if running_mean_window is None:
+        running_mean_window = CONFIG["preprocessing.running_mean_window"]
+    if quantile_bins is None:
+        quantile_bins = CONFIG["preprocessing.quantilemap_quantile_bins"]
+    if warming_levels is None:
+        warming_levels = CONFIG.get("preprocessing.quantilemap_warming_levels")
+    if simulation_round is None:
+        simulation_round = CONFIG["isimip.simulation_round"]
+    if projection_baseline is None:
+        projection_baseline = CONFIG["preprocessing.projection_baseline"]
+    if season is None:
+        season = list(CONFIG["preprocessing.seasons"])
+    elif isinstance(season, str):
+        season = [season]
+    if isinstance(indicator, str):
+        indicator = [indicator]
+
+    o = argparse.Namespace(
+        running_mean_window=running_mean_window, warming_level_file=warming_level_file,
+        warming_levels=warming_levels, quantile_bins=quantile_bins,
+        equiprobable_climate_models=equiprobable_climate_models, indicator=indicator, season=season,
+        simulation_round=simulation_round, projection_baseline=projection_baseline,
+        skip_transform=skip_transform, regional=regional, regional_no_admin=regional_no_admin, map=map,
+        map_chunk_size=map_chunk_size, weight=weight, region=region, overwrite=overwrite, suffix=suffix,
+        auto_suffix=auto_suffix, skip_nans=skip_nans, cpus=cpus,
+    )
+
+    if o.auto_suffix:
+        parts = []
+        if o.skip_transform:
+            parts.append("abs")
+        if o.running_mean_window != CONFIG["preprocessing.running_mean_window"]:
+            parts.append(f"rmw{o.running_mean_window}")
+        if o.warming_levels is not None:
+            parts.append(f"wl{len(o.warming_levels)}")
+        if o.quantile_bins != CONFIG["preprocessing.quantilemap_quantile_bins"]:
+            parts.append(f"qb{o.quantile_bins}")
+        if o.equiprobable_climate_models:
+            parts.append("eq")
+        if len(parts) > 0:
+            o.suffix += "_" + "-".join(parts)
+
+    CONFIG["isimip.simulation_round"] = o.simulation_round
+    CONFIG["preprocessing.projection_baseline"] = o.projection_baseline
+
+    if o.region is None:
+        o.region = get_all_regions()
+
+    if o.warming_level_file is None:
+        o.warming_level_file = get_warming_level_file(**{**CONFIG, **vars(o)})
+
+    warming_levels_df = pd.read_csv(o.warming_level_file)
+
+    if o.warming_levels is not None:
+        quantilemap_warming_levels = np.asarray(o.warming_levels)
+        warming_levels_df = warming_levels_df[warming_levels_df["warming_level"].isin(quantilemap_warming_levels)]
+
+    root_dir = Path(o.warming_level_file).parent
+
+    output_files = []
+
+    for name in o.indicator:
+        ind = Indicator.from_config(name, **({"transform": None} if o.skip_transform else {}))
+
+        for s in o.season:
+            if ind.frequency == "annual" and s != "annual":
+                continue
+
+            for mode in ["regional_no_admin", "regional", "map"]:
+                if not getattr(o, mode):
+                    continue
+
+                if mode == "regional":
+                    open_func_kwargs_loop = [dict(region=r, regional_weight=o.weight) for r in o.region]
+                    files = [get_filepath(ind.name, s, root_dir=root_dir, suffix=o.suffix,
+                                           region=r, regional_weight=o.weight) for r in o.region]
+                else:
+                    regional_flag = mode in ["regional_no_admin", "regional"]
+                    open_func_kwargs_loop = [dict(regional=regional_flag, regional_weight=o.weight)]
+                    files = [get_filepath(ind.name, s, root_dir=root_dir, suffix=o.suffix,
+                                           regional=regional_flag, regional_weight=o.weight)]
+
+                if len(open_func_kwargs_loop) > 1 and o.cpus and o.cpus > 1:
+                    import concurrent.futures
+                    cpus_ = min(o.cpus, len(open_func_kwargs_loop))
+                    executor = concurrent.futures.ProcessPoolExecutor(max_workers=cpus_)
+                else:
+                    executor = argparse.Namespace(submit=lambda f, *args, **kwargs: f(*args, **kwargs))
+
+                jobs = [executor.submit(_loop, o, ind, warming_levels_df, s, mode, open_func_kwargs, filepath)
+                        for filepath, open_func_kwargs in zip(files, open_func_kwargs_loop)]
+
+                for job in jobs:
+                    if job is not None:
+                        job.result()
+
+                output_files.extend(files)
+
+    return output_files
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__, epilog="", formatter_class=argparse.RawDescriptionHelpFormatter, parents=[config_parser, log_parser])
+
+    group = parser.add_argument_group('Warming level matching')
+    group.add_argument("--running-mean-window", default=CONFIG["preprocessing.running_mean_window"], help="default: %(default)s years")
+    group.add_argument("--warming-level-file", default=None)
+    group.add_argument("--warming-levels", type=float, default=CONFIG.get("preprocessing.quantilemap_warming_levels"), nargs='+', help="All warming levels by default")
+    group.add_argument("--quantile-bins", default=CONFIG["preprocessing.quantilemap_quantile_bins"], type=int, help="default: %(default)s")
+
+    egroup = group.add_mutually_exclusive_group()
+    egroup.add_argument("--no-equiprobable-climate-models", action='store_false', dest="equiprobable_climate_models",
+                       help="Do not downweight models that are more frequent in the warming level selection")
+    egroup.add_argument("--equiprobable-climate-models", action='store_true', help=argparse.SUPPRESS)
+
+    group = parser.add_argument_group('Indicator variable')
+    all_variables = list(CONFIG["isimip.variables"]) + sorted(set(v.split(".")[0] for v in CONFIG["indicator"]))
+    group.add_argument("-i", "--indicator", nargs='+', default=[], choices=all_variables)
+    group.add_argument("--season", nargs="+", default=list(CONFIG["preprocessing.seasons"]), choices=list(CONFIG["preprocessing.seasons"]))
+    group.add_argument("--simulation-round", nargs="+", default=CONFIG["isimip.simulation_round"], help="default: %(default)s")
+    group.add_argument("--projection-baseline", default=CONFIG["preprocessing.projection_baseline"], type=int, nargs=2, help="default: %(default)s")
+    group.add_argument("--skip-transform", action='store_true', help="Skip the transformation of the indicator (absolute indicator only)")
+    group.add_argument("--regional", action='store_true', help="Process regional averages (one file per region including admin boundaries)")
+    group.add_argument("--regional-no-admin", action='store_true', help="Process merged regional averages without admin boundaries")
+    group.add_argument("--map", action='store_true', help="Process lat/lon maps")
+    group.add_argument("--map-chunk-size", type=int, choices=[5, 10, 36, 60, 72, 90, 180], help="Process maps in smaller chunk to save memory usage (lat range = 360)")
+
+    group = parser.add_argument_group('Regional average variables')
+    group.add_argument("--weight", default="latWeight", choices=CONFIG["preprocessing.regional.weights"], help="default: %(default)s")
+    group.add_argument("--region", nargs="+", default=None, choices=get_all_regions(), help="Regions to process if --regional")
+
+    parser.add_argument("-O", "--overwrite", action='store_true')
+    parser.add_argument("--suffix", default="", help="add suffix to the output file name (to reflect different processing options)")
+    parser.add_argument("--no-auto-suffix", action='store_false', dest="auto_suffix", help="add an automatically-generated suffix to the output file name (to reflect different processing options)")
+    parser.add_argument("--skip-nans", action='store_true', help="Skip NaN values in the quantile map calculation")
+    parser.add_argument("--cpus", type=int)
+
+    o = parser.parse_args()
+
+    make_quantilemaps(
+        indicator=o.indicator, season=o.season, warming_level_file=o.warming_level_file,
+        warming_levels=o.warming_levels, quantile_bins=o.quantile_bins,
+        running_mean_window=o.running_mean_window, equiprobable_climate_models=o.equiprobable_climate_models,
+        simulation_round=o.simulation_round, projection_baseline=o.projection_baseline,
+        skip_transform=o.skip_transform, regional=o.regional, regional_no_admin=o.regional_no_admin,
+        map=o.map, map_chunk_size=o.map_chunk_size, weight=o.weight, region=o.region,
+        overwrite=o.overwrite, suffix=o.suffix, auto_suffix=o.auto_suffix, skip_nans=o.skip_nans, cpus=o.cpus,
+    )
+
+
+if __name__ == "__main__":
+    main()
+'''
 def main():
     import argparse
     parser = argparse.ArgumentParser(description=__doc__, epilog="""""", formatter_class=argparse.RawDescriptionHelpFormatter, parents=[config_parser, log_parser])
@@ -597,3 +842,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+'''

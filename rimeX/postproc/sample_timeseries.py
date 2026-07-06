@@ -644,37 +644,6 @@ def sample_timeseries(
     # ------------------------------------------------------------------
     simulation_parts: list[list[pd.DataFrame]] = []
 
-    #for year in sorted_years:
-    #    pieces = out_dict.get(year, {})
-    #    year_dfs: list[pd.DataFrame] = []
-
-     #   for sample_idx in range(pieces.get("middle_count", 0)):
-     #       match = pieces["middle"][sample_idx]
-     #       mid_year = match["midyear"]
-
-      #      if mid_year_mode:
-      #          half = (years_per_simulation_piece - 1) // 2
-     #           piece_start = mid_year - half
-      #          piece_end   = mid_year + (years_per_simulation_piece // 2)
-      #      else:
-       #         piece_start = mid_year
-      #          piece_end   = mid_year + years_per_simulation_piece - 1
-
-       #     df_piece = load_timeinterval(
-       #         indicator=indicator,
-       #         model=match["model"],
-       #         scenario=match["scenario"],
-       #         aggregation=weighting_spatial_aggregation,
-       #         regions=regions_emulation,
-       #         start_year=piece_start,
-       #         end_year=piece_end,
-       #         province_level=province_level,
-       #         baseline=baseline,
-       #         base_path=os.path.join(path_to_quantilemaps, "indicators"),
-       #     )
-        #    year_dfs.append(df_piece)
-
-        #simulation_parts.append(year_dfs)
     for year in sorted_years:
         pieces = out_dict.get(year, {})
         year_dfs: list[pd.DataFrame] = []
