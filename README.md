@@ -48,7 +48,7 @@ pip install git+https://github.com/iiasa/rimeX.git
 To install all optional dependencies, append `[all]`, e.g. from the local clone:
 
 ```bash
-pip install -e .[all]
+pip install -e '.[all]'
 ```
 
 ### Conda installation (alternative)

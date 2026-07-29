@@ -24,6 +24,8 @@ dependencies = [
   "numpy",
   "pandas",
   "xarray",
+  "netcdf4",
+  "h5netcdf",
   "tqdm",
   "flatdict",
   "isimip_client",
@@ -46,6 +48,8 @@ all = [
     "pyproj",
     # rimeX.postproc.lifetime_exposure:
     "openpyxl",
+    # tutorial notebooks:
+    "jupyter",
 ]
 
 [tool.setuptools.packages.find]

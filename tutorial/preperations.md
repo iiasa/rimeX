@@ -19,10 +19,10 @@ Clone the repository and install it in editable mode:
 ```bash
 git clone https://github.com/iiasa/rimeX.git
 cd rimeX
-pip install -e .[all]
+pip install -e '.[all]'
 ```
 
-The `[all]` extra pulls in the optional dependencies needed across the tutorial (e.g. `xarray`, `jupyter`). If you plan to run the preprocessing steps yourself on your own raw ISIMIP data (rather than just the provided example files), you'll also need **CDO**:
+The `[all]` extra pulls in the optional dependencies needed across the tutorial (e.g. `jupyter`). If you plan to run the preprocessing steps yourself on your own raw ISIMIP data (rather than just the provided example files), you'll also need **CDO**:
 
 ```bash
 # Linux
@@ -42,7 +42,7 @@ conda create -n rimex-env python=3.10
 conda activate rimex-env
 conda install -c conda-forge cdo
 cd rimeX
-pip install -e .[all]
+pip install -e '.[all]'
 ```
 
 ## Setting up the Jupyter kernel
