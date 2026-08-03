@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
 # utils.py
 # Small helper functions for preparation of data and used also within functions.
 
