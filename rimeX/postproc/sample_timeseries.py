@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
 import glob, sys
 import matplotlib.pyplot as plt
 import numpy as np

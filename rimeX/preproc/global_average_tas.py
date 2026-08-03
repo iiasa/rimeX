@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
 """This module compute ISIMIP GCMs global mean temperature w.r.t. the projection baseline, to temperature matching.
 """
 import argparse

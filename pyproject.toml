@@ -1,21 +1,22 @@
 [build-system]
-requires = ["setuptools>=61.0", "setuptools_scm[toml]>=6.2"]
+requires = ["setuptools>=77.0.3"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "rimeX"
 authors = [
     {name = "Mahé Perrette", email = "mahe.perrette@gmail.com"},
-    {name = "Niklas Schwind", email = "niklas.schwind@climateanalytics.org"},
+    {name = "Niklas Schwind", email = "schwind@iiasa.ac.at"},
     {name = "Edward byers", email = "byers@iiasa.ac.at"},
     {name = "Mia Werning", email = "werning@iiasa.ac.at"},
 ]
 
-description='Rapid Impact Model Emulator for the Climate Impact Explorer in collaboration with IIASA'
+version = "1.0.0"
+description='Combining simple climate models, Earth system models, and climate impact models into a unified statistical emulator for regional climate indicators'
 readme = "README.md"
 requires-python = ">=3.7"
 keywords = ['climate', 'impact model', 'emulator', 'ISIMIP', 'global mean temperature']
-license = {text = "MIT"}
+license = "AGPL-3.0-or-later"
 classifiers = [
     "Programming Language :: Python :: 3",
 ]
@@ -31,8 +32,6 @@ dependencies = [
   "isimip_client",
   "scipy",
 ]
-
-dynamic = ["version"]
 
 [project.optional-dependencies]
 all = [
@@ -72,6 +71,3 @@ rime-run-table = "rimeX.scripts.table:main"
 
 [project.urls]
 homepage = "https://github.com/iiasa/rime/tree/rimeX"
-
-[tool.setuptools_scm]
-write_to = "rimeX/_version.py"

@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
 """Preprocessing step. Followup of warminglevels.py to bin a given indicator variable into into warming level categories.
 
 The script is optional. It provides preprocessing for all variables / region / season etc but could also be done on-the-fly in emulator.py (specific combination)

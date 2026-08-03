@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
 """This module contains functions to calculate climate indicators
 
 The function signature is:
