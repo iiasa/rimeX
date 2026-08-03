@@ -1,5 +1,7 @@
 # rimeX
 
+[![License: AGPL v3](https://img.shields.io/badge/License-AGPL_v3-blue.svg)](https://www.gnu.org/licenses/agpl-3.0)
+
 ## Description
 
 This repository contains code originally written for the [Climate Impact Explorer](https://climate-impact-explorer.climateanalytics.org).
@@ -101,3 +103,58 @@ The following scripts are made available, for which inline help is available wit
 - Also useful to specify the data paths:
 
 	- `rime-config` : print the config to screen (toml format)
+
+## License
+
+rimeX is licensed under the GNU Affero General Public License v3.0 or later
+(AGPL-3.0-or-later) — see [LICENSE](LICENSE).
+
+Component provenance and attribution, including code originating from [iiasa/rime](https://github.com/iiasa/rime),
+is recorded in [NOTICE](NOTICE).
+
+## Commercial licensing
+
+AGPL-3.0 permits free use, modification and redistribution, provided that
+redistributed or network-hosted derivative works are also released under
+AGPL-3.0.
+
+Organisations that wish to distribute rimeX, or offer it as a hosted service,
+without releasing their own modifications under AGPL-3.0 may obtain a
+commercial licence. Contact rimex@iiasa.ac.at for terms.
+
+**Do I need a commercial licence?**
+
+- **No** — if you use rimeX to produce reports, analyses or other deliverables
+  for clients, without distributing or hosting rimeX itself.
+- **No** — if you run rimeX internally within your organisation, however
+  modified, without redistributing it.
+- **Yes** — if you distribute rimeX (modified or not) as part of a proprietary
+  product, or run a modified version as a network-accessible service, and wish
+  to keep your modifications closed.
+
+## Citation
+
+If you use rimeX in any published work, please cite:
+
+> Schwind, N., Perrette, M., Byers, E., Högner, A., Lejeune, Q., Möller, T., Nicholls, Z., Pfleiderer, P., Schöngart, S., Werning, M., and Schleussner, C.-F.: RIME-X v1.0: combining simple climate models, Earth system models, and climate impact models into a unified statistical emulator for regional climate indicators, Geosci. Model Dev., 19, 6797–6828, https://doi.org/10.5194/gmd-19-6797-2026, 2026.
+
+and the archived software version (DOI: [10.5281/zenodo.17491734](https://doi.org/10.5281/zenodo.17491734)). Machine-readable citation metadata is in [CITATION.cff](CITATION.cff).
+
+If your use of rimeX leads to a substantial scientific contribution, we would
+welcome a conversation about collaboration or co-authorship — please get in touch.
+We are keen to keep track of its use.
+
+## Data sources
+
+rimeX downloads and processes third-party climate data, including ISIMIP output
+and the datasets of Werning et al. (2024). The rimeX licence covers the software
+only. Data obtained through the download scripts remains subject to its own terms
+of use and attribution requirements.
+
+## Versions
+
+rimeX follows semantic versioning. v1.0.0 is the version described in
+Schwind et al. (2026) and archived at [10.5281/zenodo.17491734](https://doi.org/10.5281/zenodo.17491734).
+
+Licence terms for future releases may differ. v1.0.0 remains available under
+AGPL-3.0-or-later permanently.
