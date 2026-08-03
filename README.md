@@ -2,19 +2,11 @@
 
 [![License: AGPL v3](https://img.shields.io/badge/License-AGPL_v3-blue.svg)](https://www.gnu.org/licenses/agpl-3.0)
 
-## Description
+## Introduction
 
-This repository contains code originally written for the [Climate Impact Explorer](https://climate-impact-explorer.climateanalytics.org).
-It started as a rewrite of the emulator intended for provide better statistical calculations with exact frequentist estimates.
-It was moved to a standalone repository for re-use in various projects, and is intended to supercede the code for the [Rapid Impact Model Emulator](https://github.com/iiasa/rime) (hence its name).
+rimeX (RIME-X) is a probabilistic emulator that translates emissions scenarios into regional-scale climate and climate-impact indicators while explicitly quantifying uncertainty. It combines ensemble global-mean-temperature projections from simple climate models with warming-level-dependent regional indicator distributions estimated from weighted CMIP/ISIMIP ensembles, producing scenario-dependent, time-evolving probability distributions for a wide range of indicators whose behaviour is governed primarily by the global warming level.
 
-## Back-compatibility and transition period
-
-For users who want to use the original module by Edward Byers instead, the `rimeX.legacy` subpackage is made available.
-All `rime` imports were updated with `rimeX.legacy`, but it is otherwise left unedited since import on March 22nd, 2024: `sed -i "s/rime\./rimeX.legacy./g" *.py wip_scraps/*.py`.
-
-It is possible to import via `import rimeX.legacy as rime` to use existing code. Eventually this subpackage will be deprecated.
-
+rimeX extends and supersedes the [RIME](https://github.com/iiasa/rime) emulator (see [Back-compatibility and transition period](#back-compatibility-and-transition-period) below), replacing its deterministic approach with this fully probabilistic one — hence its name.
 
 ## Install
 
@@ -40,8 +32,7 @@ brew install cdo
 conda install -c conda-forge cdo
 ```
 
-For the end-user (we're not at this stage yet) or one-off testing, it's also possible to do it in one go with pip, but the whole repo is cloned in the background so it's slower.
-The command is shown below for completeness, but it is not recommended (slower and no edits possible):
+For end-users or one-off testing, it's also possible to install directly with pip; the whole repo is cloned in the background, so it's slower than a local clone and doesn't allow for local edits:
 
 ```bash
 pip install git+https://github.com/iiasa/rimeX.git
@@ -114,7 +105,7 @@ is recorded in [NOTICE](NOTICE).
 
 ## Commercial licensing
 
-AGPL-3.0 permits free use, modification and redistribution, provided that
+AGPL-3.0 permits use, modification and redistribution, provided that
 redistributed or network-hosted derivative works are also released under
 AGPL-3.0.
 
@@ -124,10 +115,7 @@ commercial licence. Contact rimex@iiasa.ac.at for terms.
 
 **Do I need a commercial licence?**
 
-- **No** — if you use rimeX to produce reports, analyses or other deliverables
-  for clients, without distributing or hosting rimeX itself.
-- **No** — if you run rimeX internally within your organisation, however
-  modified, without redistributing it.
+- **No** — if you use rimeX to produce reports, analyses or other deliverables, without distributing or hosting rimeX itself.
 - **Yes** — if you distribute rimeX (modified or not) as part of a proprietary
   product, or run a modified version as a network-accessible service, and wish
   to keep your modifications closed.
@@ -136,13 +124,11 @@ commercial licence. Contact rimex@iiasa.ac.at for terms.
 
 If you use rimeX in any published work, please cite:
 
-> Schwind, N., Perrette, M., Byers, E., Högner, A., Lejeune, Q., Möller, T., Nicholls, Z., Pfleiderer, P., Schöngart, S., Werning, M., and Schleussner, C.-F.: RIME-X v1.0: combining simple climate models, Earth system models, and climate impact models into a unified statistical emulator for regional climate indicators, Geosci. Model Dev., 19, 6797–6828, https://doi.org/10.5194/gmd-19-6797-2026, 2026.
-
-and the archived software version (DOI: [10.5281/zenodo.17491734](https://doi.org/10.5281/zenodo.17491734)). Machine-readable citation metadata is in [CITATION.cff](CITATION.cff).
+> Schwind, N., Perrette, M., Byers, E., Högner, A., Lejeune, Q., Möller, T., Nicholls, Z., Pfleiderer, P., Schöngart, S., Werning, M., and Schleussner, C.-F.: RIME-X v1.0: combining simple climate models, Earth system models, and climate impact models into a unified statistical emulator for regional climate indicators, Geosci. Model Dev., 19, 6797–6828, https://doi.org/10.5194/gmd-19-6797-2026, 2026. Machine-readable citation metadata is in [CITATION.cff](CITATION.cff).
 
 If your use of rimeX leads to a substantial scientific contribution, we would
 welcome a conversation about collaboration or co-authorship — please get in touch.
-We are keen to keep track of its use.
+We are keen to co-develop extensions of the methodology and keep track of use and applications.
 
 ## Data sources
 
@@ -154,7 +140,14 @@ of use and attribution requirements.
 ## Versions
 
 rimeX follows semantic versioning. v1.0.0 is the version described in
-Schwind et al. (2026) and archived at [10.5281/zenodo.17491734](https://doi.org/10.5281/zenodo.17491734).
+[Schwind et al. (2026)](https://doi.org/10.5194/gmd-19-6797-2026).
 
 Licence terms for future releases may differ. v1.0.0 remains available under
 AGPL-3.0-or-later permanently.
+
+## Back-compatibility and transition period
+
+For users who want to use the original module instead, the `rimeX.legacy` subpackage is made available.
+All `rime` imports were updated with `rimeX.legacy`, but it is otherwise left unedited since import on March 22nd, 2024: `sed -i "s/rime\./rimeX.legacy./g" *.py wip_scraps/*.py`.
+
+It is possible to import via `import rimeX.legacy as rime` to use existing code. Eventually this subpackage will be deprecated.
