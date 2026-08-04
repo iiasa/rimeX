@@ -54,7 +54,11 @@ all = [
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["rimeX", "rimeX.legacy", "rimeX.preproc", "rimeX.datasets", "rimeX_datasets"]
+include = ["rimeX", "rimeX.legacy", "rimeX.preproc", "rimeX.postproc", "rimeX.datasets", "rimeX.scripts", "rimeX_datasets"]
+
+[tool.setuptools.package-data]
+rimeX = ["config.toml"]
+"rimeX.legacy" = ["indicator_params.yml"]
 
 [project.scripts]
 rime-config = "rimeX.config:main"
