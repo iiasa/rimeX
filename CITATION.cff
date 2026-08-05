@@ -1,0 +1,71 @@
+cff-version: 1.2.0
+message: "If you use rimeX, please cite both the software and the accompanying paper."
+title: "rimeX: Rapid Impact Model Emulator (extended)"
+version: 1.0.0
+date-released: "2026-07-30"
+license: AGPL-3.0-or-later
+repository-code: "https://github.com/iiasa/rimeX"
+doi: "10.5281/zenodo.17491734"
+type: software
+authors:
+  - given-names: Niklas
+    family-names: Schwind
+    email: schwind@iiasa.ac.at
+  - given-names: Mahé
+    family-names: Perrette
+    email: mahe.perrette@gmail.com
+  - given-names: Edward
+    family-names: Byers
+    email: byers@iiasa.ac.at
+  - given-names: Annika
+    family-names: Högner
+  - given-names: Quentin
+    family-names: Lejeune
+  - given-names: Tessa
+    family-names: Möller
+  - given-names: Zebedee
+    family-names: Nicholls
+  - given-names: Peter
+    family-names: Pfleiderer
+  - given-names: Sarah
+    family-names: Schöngart
+  - given-names: Michaela
+    family-names: Werning
+    email: werning@iiasa.ac.at
+  - given-names: Carl-Friedrich
+    family-names: Schleussner
+preferred-citation:
+  type: article
+  title: >-
+    RIME-X v1.0: combining simple climate models, Earth system models, and
+    climate impact models into a unified statistical emulator for regional
+    climate indicators
+  authors:
+    - given-names: Niklas
+      family-names: Schwind
+    - given-names: Mahé
+      family-names: Perrette
+    - given-names: Edward
+      family-names: Byers
+    - given-names: Annika
+      family-names: Högner
+    - given-names: Quentin
+      family-names: Lejeune
+    - given-names: Tessa
+      family-names: Möller
+    - given-names: Zebedee
+      family-names: Nicholls
+    - given-names: Peter
+      family-names: Pfleiderer
+    - given-names: Sarah
+      family-names: Schöngart
+    - given-names: Michaela
+      family-names: Werning
+    - given-names: Carl-Friedrich
+      family-names: Schleussner
+  journal: Geoscientific Model Development
+  volume: 19
+  start: 6797
+  end: 6828
+  year: 2026
+  doi: 10.5194/gmd-19-6797-2026

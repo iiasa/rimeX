@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
 import fnmatch
 import glob
 from pathlib import Path

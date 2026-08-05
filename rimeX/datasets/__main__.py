@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
 from rimeX.datasets.manager import main
 
 if __name__ == "__main__":

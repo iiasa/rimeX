@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
 import numpy as np
 import scipy.stats as stat
 from scipy.optimize import minimize

@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
 """A faster emulator, or interpolator, that does not attempt to compute uncertainties.
 """
 import argparse
