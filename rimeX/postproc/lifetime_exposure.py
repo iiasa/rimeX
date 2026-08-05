@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
 from rimeX.preproc.quantilemaps import make_timesensitive_quantilemap_prediction
 import pandas as pd
 import numpy as np 

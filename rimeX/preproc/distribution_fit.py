@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
 """
 Fits a non-stationary GEV (dependent on the warming level) to each each timeseries of values for a given indicator and ISIMIP-simulation of a given model and then returns return period values for each position and warming level 
 """

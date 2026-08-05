@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
 """
 For a given scenario, return the mapped percentile for an indicator
 """

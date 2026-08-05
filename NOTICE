@@ -1,0 +1,23 @@
+rimeX
+Copyright (c) 2024-2026 Schwind, Perrette, Byers & Werning.
+
+This software is licensed under the GNU Affero General Public License v3.0
+or later (AGPL-3.0-or-later). See LICENSE for the full licence text.
+
+-------------------------------------------------------------------------------
+Component provenance and attribution
+-------------------------------------------------------------------------------
+
+rimeX.legacy (Rapid Impact Model Emulator, "RIME")
+
+   The rimeX.legacy subpackage derives from the RIME package
+   (https://github.com/iiasa/rime), authored by Edward Byers and colleagues
+   and published upstream under the GNU General Public License v3.0. The code
+   was imported on 22 March 2024, with import paths rewritten from `rime.` to
+   `rimeX.legacy.` and otherwise left unmodified.
+
+   As the copyright holder, IIASA has relicensed the copy of this code
+   vendored within rimeX under AGPL-3.0-or-later. The upstream RIME
+   repository is unaffected and remains available under GPL-3.0. Please also
+   credit Byers et al. 2025 when citing work that relies on the emulator
+   functionality originating in RIME.

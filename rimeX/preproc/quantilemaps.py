@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
 """Quantile maps for impacts that do not stem from a regional average
 """
 
