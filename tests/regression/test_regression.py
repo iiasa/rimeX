@@ -143,6 +143,7 @@ def hdd_pipeline_config():
             "units": "days*°C",
             "isimip_meta": {"db_file": str(db_file)},
         },
+        "preprocessing.running_mean_window": 1
     }
     previous = {k: CONFIG.get(k) for k in new_config}
     CONFIG.update(new_config)
