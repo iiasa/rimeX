@@ -19,6 +19,8 @@ from rimeX.datasets.download_isimip import Indicator
 from rimeX.preproc.warminglevels import get_warming_level_file, get_root_directory
 from rimeX.preproc.digitize import transform_indicator
 from rimeX.preproc.regional_average import get_all_regions
+import warnings
+warnings.filterwarnings("ignore", category=FutureWarning, message=".*coords will change from.*")
 
 def load_GMT_ensemble(file, projection_baseline=None, projection_baseline_offset=None):
     """Read a GMT ensemble file (e.g. MAGICC output, comma- or whitespace-separated)
@@ -62,7 +64,1050 @@ def catchwarnings(func):
 def make_quantile_map_array(indicator:Indicator, warming_levels:pd.DataFrame,
                             quantile_bins=21, season="annual", running_mean_window=21,
                             projection_baseline=None, equiprobable_models=True,
+                            skip_nans=False, open_func_kwargs={}, warming_level_simulation_key=None, use_all_timesteps=False, manual_model_weights = None,
+                            wl_to_indicator_mapping = {"experiment": "climate_scenario", "model": "climate_forcing"},
+                            ):
+    """
+    Compute quantile maps for a given indicator and warming levels
+ 
+    Parameters
+    ----------
+    indicator : GenericIndicator instance
+        It contains information about which files to open and how to transform the data.
+        This is typically obtained via `rimeX.download_isimip.Indicator.from_config("<indicator_name>")`
+    warming_levels : pd.DataFrame
+        DataFrame with the warming levels to compute the quantile maps for.
+        The columns must contain the following keys:
+        - "warming_level" : the warming level (in degrees)
+        - "year" : the year of the warming level
+        - "model" : the model name
+        - "experiment" : the experiment name
+        - "ensemble" : the ensemble member (optional)
+        - "realization" : the realization (optional)
+        The DataFrame must be sorted by "warming_level" and "year".
+        The DataFrame must contain the same columns as the simulations in the indicator.
+        The DataFrame must contain the same columns as the simulations in the indicator.
+    quantile_bins : int
+        Number of quantile bins to compute. Default is 21.
+    season : str
+        The season to compute the quantile maps for. Default is "annual".
+        Still applied when `use_all_timesteps=True` (see below): only the raw
+        timesteps falling within this season are kept as samples for that year.
+    running_mean_window : int
+        The window size for the running mean. Default is 21.
+        Ignored when `use_all_timesteps=True` (see below).
+    projection_baseline : tuple
+        The projection baseline period to use for the transformation. Default is None.
+    equiprobable_models : bool
+        If True, the models are weighted equally within each warming level bin,
+        regardless of the number of data points (scenarios, time slices) contributed by each model. Default is True.
+    skip_nans : bool
+        If True, skip NaN values in the quantile maps. Default is False.
+    open_func_kwargs : dict
+        Additional keyword arguments to pass to the open function of the indicator (e.g. regional, regional_weight, isel...).
+    warming_level_simulation_key : list
+        The keys to identify the warming level simulation (default: ["model", "experiment", "ensemble"]
+        if "ensemble" is present in the warming level file otherwise ["model", "experiment"] )
+        The keys must be present in the warming levels DataFrame and the simulations of the indicator.
+    use_all_timesteps : bool  
+        If True, for each warming-level/year, use every raw timestep within that
+        calendar year -- restricted to `season`, if given -- as a separate sample
+        for the quantile calculation, instead of averaging the (season-selected)
+        year down to a single value and running it through the running-mean smoothing.
+        This adds a "sample" dimension of variable length per simulation (e.g. up to 12
+        for monthly data restricted to one season, ~365 for daily annual data) instead
+        of contributing exactly one value per simulation per warming level. Model
+        weighting (`equiprobable_models`) still works out to the same total weight per
+        model, since the per-timestep weights are `1 / model_frequencies[model]` where
+        `model_frequencies` now counts raw timesteps rather than simulations.
+        The reference-period baseline (`dataref`, used for the indicator's transform)
+        is unaffected and still computed from the seasonally-selected annual mean.
+        Default is False, which reproduces the original behavior exactly.
+    manual_model_weights: dict or None, optional
+        Optional per-model scaling factors, keyed by model name (the value of
+        `simu[wl_to_indicator_mapping.get("model", "model")]` — i.e. the model
+        identifier as it appears in the indicator's own simulation metadata,
+        not necessarily lower-cased).
+        - Validated up front, before any simulation data is opened/loaded:
+                * if `manual_model_weights` is not a dict (and not None), a `TypeError` is raised.
+                * if any weight is negative, a `ValueError` is raised.
+                * if any model that could be processed (non-historical, with a
+                  matching warming-level entry) is missing from the dict, a
+                  `KeyError` listing the missing model(s) is raised immediately.
+        - Keys are matched case-insensitively: both the dict's keys and the
+            model identifiers from `indicator.simulations` are lower-cased
+            before comparison, so "CanESM5" and "canesm5" are equivalent.
+        - A weight of 0 is allowed and effectively drops a model from that
+            warming level's quantile calculation; only negative weights are rejected.
+        Default is None. 
+    wl_to_indicator_mapping : dict
+        A mapping of the warming level keys to the indicator keys. Default is {"experiment": "climate_scenario", "model": "climate_forcing"}.
+        The keys must be present in the warming levels DataFrame.
+        The keys must be present in the simulations of the indicator.
+    
+ 
+    Returns
+    -------
+    warming_level_data : xa.DataArray
+        The quantile maps for the given indicator and warming levels.
+        The DataArray has the following dimensions:
+        - "warming_level" : the warming level (in degrees)
+        - "quantile" : the quantile (0.0 to 1.0)
+        - "lat" : the latitude
+        - "lon" : the longitude
+        The DataArray has the same coordinates as the indicator.
+        The DataArray has the same attributes as the indicator.
+        The DataArray has the same units as the indicator.
+    """
+    simulations = indicator.simulations
+    all_experiments = sorted(set(simu["climate_scenario"] for simu in simulations))
+    w = running_mean_window // 2 if running_mean_window // 2 >= 1 else 1#w = running_mean_window // 2
+    quants = np.linspace(0, 1, quantile_bins)
+    if warming_level_simulation_key is None:
+        required_keys = ["model", "experiment"]
+        optional_keys = ["ensemble", "realization"]
+        warming_level_simulation_key = required_keys + [k for k in optional_keys if k in warming_levels.columns]
+    # use lower-case to avoid case issues
+    warming_levels = warming_levels.copy()
+    for key in warming_level_simulation_key:
+        assert key in warming_levels.columns, f"Missing key {key} in warming levels"
+        warming_levels[key] = warming_levels[key].map(str.lower)
+    # group the warming levels by simulation key (model, scenario, ensemble)
+    key_func_wl = lambda r: tuple(r[k] for k in warming_level_simulation_key)
+    warming_level_by_model_exp = {k: list(group) for k, group in groupby(sorted(warming_levels.to_dict(orient="records"), key=key_func_wl), key=key_func_wl)}
+    keywl = lambda r: r["warming_level"]
+    wl_records = sorted(warming_levels.to_dict(orient="records"), key=keywl)
+    logger.info(f"Collect quantile maps data for {indicator.name} | {season}. Warming levels {wl_records[0]['warming_level']} to {wl_records[-1]['warming_level']}")
+    # any situation where that could be relaxed to r.get(...) ? (e.g. ensemble is present in the warming level file but not in the indicator simulations)
+    key_func = lambda r: tuple(r[wl_to_indicator_mapping.get(k, k)] for k in warming_level_simulation_key)
+    
+    if manual_model_weights is not None:
+        if not isinstance(manual_model_weights, dict):
+            raise TypeError(f"manual_model_weights must be a dict or None, got {type(manual_model_weights)}")
+        # NEW: normalize keys to lower-case so lookups are case-insensitive
+        manual_model_weights = {str(k).lower(): v for k, v in manual_model_weights.items()}
+        # NEW: enforce non-negative weights (0 is allowed and intentionally drops a model)
+        negative = {k: v for k, v in manual_model_weights.items() if v < 0}
+        if negative:
+            raise ValueError(f"manual_model_weights must be non-negative, got negative weight(s): {negative}")
+        # NEW: figure out exactly which models will actually be processed, matching the
+        # skip conditions used in the main loop below, and fail fast if any are missing
+        required_models = sorted({
+            str(simu[wl_to_indicator_mapping.get("model", "model")]).lower()
+            for simu in simulations
+            if simu[wl_to_indicator_mapping.get("experiment", "experiment")] != "historical"
+            and key_func(simu) in warming_level_by_model_exp
+        })
+        missing_models = [m for m in required_models if m not in manual_model_weights]
+        if missing_models:
+            raise KeyError(f"manual_model_weights is missing weight(s) for required model(s): {missing_models}")
+
+    
+    collect = {}
+    for simu in tqdm.tqdm(simulations):
+        key = key_func(simu)
+        key_meta = dict(zip([wl_to_indicator_mapping.get(k, k) for k in warming_level_simulation_key], key))
+        if simu[wl_to_indicator_mapping.get("experiment", "experiment")] == "historical":
+            continue # this will be covered by the projection
+        simu_historical = {**simu, wl_to_indicator_mapping.get("experiment", "experiment"): "historical"}
+        # check if that simulaion is required
+        if key not in warming_level_by_model_exp:
+            logger.debug(f"No warming level calculation for {key_meta}: Skip")
+            continue
+        wl_data_points = warming_level_by_model_exp[key]
+        if "historical" in all_experiments:
+            data = xa.concat([indicator.open_simulation(**simu_, **open_func_kwargs) for simu_ in [simu_historical, simu]], dim="time")
+        else:
+            data = indicator.open_simulation(**simu, **open_func_kwargs)
+        with data:
+            # this is used for model-weighting
+            model = simu[wl_to_indicator_mapping.get("model", "model")]
+            # only select relevant months
+            if season is not None:
+                season_mask = data["time.month"].isin(CONFIG["preprocessing.seasons"][season])
+                seasonal_sel = data.isel(time=season_mask)
+            else:
+                seasonal_sel = data
+            # need to convert certain variables to float
+            if seasonal_sel.dtype.name.startswith("timedelta"):
+                seasonal_sel = seasonal_sel.load()
+                seasonal_sel.values = seasonal_sel.values.astype("timedelta64[D]").astype(float)
+            # crunch anual mean
+            annual_mean = seasonal_sel.groupby("time.year").mean()
+            # subtract the reference period or express as relative change
+            if getattr(indicator, "transform", None) and projection_baseline is not None:
+                y1, y2 = projection_baseline
+                dataref = annual_mean.sel(year=slice(y1, y2)).mean("year").load()
+                assert np.isfinite(dataref.values).any(), key_meta
+            # make 21-year running mean
+            # we require at least half full to have non-nans values
+            if not use_all_timesteps:  # CHANGED: skip smoothing entirely, it's unused in the new mode
+                data_smooth = annual_mean.rolling(year=running_mean_window, center=True, min_periods=w).mean().load()
+            # assert np.isfinite(data_smooth.values).any(), key
+            # collect all time slices required for the warming levels
+            for wl_data_point in wl_data_points:
+                year = wl_data_point["year"]
+                wl = wl_data_point["warming_level"]
+                # mean over required time-slice
+                # data = seasonal_sel.sel(time=slice(str(year-w),str(year+w))).mean("time").load()
+                if use_all_timesteps:  # NEW branch: raw (season-filtered) timesteps instead of averaging + smoothing
+                    # `seasonal_sel` already restricts to `season`'s months (or is the full
+                    # timeseries if season is None) and already had the timedelta->float
+                    # conversion applied above, so we can use it as-is here.
+                    year_mask = seasonal_sel["time.year"] == year
+                    if not bool(year_mask.any()):
+                        logger.warning(f"{indicator.name} | Missing year {year} in {key_meta}")
+                        continue
+                    data = seasonal_sel.isel(time=year_mask).load()
+                    if not np.isfinite(data.values).any():
+                        logger.debug(f"All NaNs: {(wl, year, simu)}")
+                        continue
+                    # keep every raw (season-filtered) timestep as its own sample instead of
+                    # averaging them away
+                    data = data.rename({"time": "sample"}).drop_vars("sample")
+                else:
+                    try:
+                        data = data_smooth.sel(year=year).load()
+                    except KeyError:
+                        logger.warning(f"{indicator.name} | Missing year {year} in {key_meta}")
+                        continue
+                    if not np.isfinite(data.values).any():
+                        logger.debug(f"All NaNs: {(wl, year, simu)}")
+                        continue
+                    assert "year" not in data.dims, (data.dims, data.shape)
+                # subtract the reference period or express as relative change
+                if getattr(indicator, "transform", None):
+                    data = transform_indicator(data, indicator.name, dataref=dataref).load()
+                # assign metadata
+                data = data.assign_coords({
+                    "warming_level": wl,
+                    "midyear": year,
+                    **key_meta
+                    })
+                assert "time" not in data.dims, (data.dims, data.shape)
+                # experiment = simu[wl_to_indicator_mapping.get("scenario", "scenario")]
+                # append the newly calculated data where it belongs
+                values, models = collect.setdefault(wl, ([], []))
+                values.append(data)
+                n_new_samples = data.sizes.get("sample", 1)  # CHANGED: was `models.append(model)`
+                models.extend([model] * n_new_samples)
+                if "sample" in data.dims:  # NEW: keep `data` as a scalar-shaped template like the non-flagged path,
+                    data = data.isel(sample=0, drop=True)  # so the post-loop shape logic below still works unchanged
+    logger.info(f"Compute quantiles for collected data {indicator.name} | {season}.")
+    warming_level_coords = np.array(sorted(collect.keys()))
+    # create an empty array to store the quantiles
+    warming_level_data = xa.DataArray(np.empty((len(warming_level_coords), len(quants), *data.shape)),
+                                      dims=["warming_level", "quantile", *data.dims],
+                                      coords={
+                                        "warming_level": warming_level_coords,
+                                        "quantile": quants,
+                                        **{k:data.coords[k] for k in data.dims},
+                                        },
+                                      name=indicator.name,
+                                      attrs={"units": getattr(indicator, "units", "")},
+                                      )
+    # now re-organize the collected values by warming level and calculate the quantiles
+    for i,wl in enumerate(tqdm.tqdm(warming_level_coords)):
+        values, models = collect.pop(wl)
+        model_frequencies = {model: len(list(group)) for model, group in groupby(sorted(models))}
+        if manual_model_weights is not None:
+            weights = np.array([1/model_frequencies[model] * manual_model_weights[model.lower()] if equiprobable_models else manual_model_weights[model.lower()] for model in models])
+        else:
+            weights = np.array([1/model_frequencies[model] if equiprobable_models else 1 for model in models])
+        samples = xa.concat(values, dim="sample")
+        del values  # clear memory
+        # quantiles = samples.quantile(quants, dim="sample")
+        assert np.any(np.isfinite(samples.values)), (wl, samples.shape)
+        if equiprobable_models:
+            quantiles = fast_weighted_quantile(samples, quants, weights=weights, dim="sample", skipna=skip_nans)
+        else:
+            quantiles = fast_quantile(samples, quants, dim="sample", skipna=skip_nans)
+        warming_level_data.values[i] = quantiles.transpose("quantile", ...).values
+        del samples # clear memory
+        del quantiles # clear memory
+    return warming_level_data
+
+
+def chunked(dim, size, total_size):
+    """
+    Decorator to process the data in chunks
+    (e.g. call quantile maps on 1 or 5 or 10 degrees latitude bands to reduce memory usage)
+    """
+    def decorator(func):
+        def wrapped(indicator, warming_levels, open_func_kwargs={}, **kwargs):
+            chunks = []
+            for isel in range(0, total_size, size):
+                logger.info(f"Chunk along {dim}: {isel} to {isel+size} of {total_size}")
+                open_func_kwargs_ = {**open_func_kwargs, "isel": {dim: slice(isel, isel+size)}}
+                result = func(indicator, warming_levels, open_func_kwargs=open_func_kwargs_, **kwargs)
+                chunks.append(result)
+            return xa.concat(chunks, dim=dim)
+        return wrapped
+    return decorator
+
+
+def get_filepath(name, season="annual", root_dir=None, suffix="", region=None, regional=False,
+                 regional_weight="latWeight", regions=None, **kw):
+    if root_dir is None:
+        root_dir = get_root_directory(**kw)
+    if regional:
+        if regions is not None and regions != get_all_regions():
+            parts = []
+            if len(regions) == 1:
+                parts.append(f"r{regions[0].lower()}")
+            else:
+                parts.append(f"r{len(regions)}")
+            suffix += f"_{'-'.join(parts)}"
+        return root_dir / "quantilemaps_regional" / name / f"{name}_{season}_noadmin_{regional_weight.lower()}{suffix}.nc"
+    elif region is not None:
+        return root_dir / "quantilemaps_regional_admin" / name / region / f"{name}_{season}_{region.lower()}_{regional_weight.lower()}{suffix}.nc"
+    else:
+        return root_dir / "quantilemaps" / name / f"{name}_{season}_quantilemaps{suffix}.nc"
+
+def make_timesensitive_quantilemap_prediction(quantile_maps, gmt, region, indicator, samples=100, seed=42, quantiles=[0.5, .05, .95], mode="deterministic", clip=False, skipna=False):
+    """Make a prediction form the quantile map for a given global mean temperature using different quantile_maps per year. You can use this function to account for e.g. timesensitive weighting schemes in your emulation appearing when socioeconomic conditions change
+
+    Parameters
+    ----------
+    quantile_maps : dictionary with all years as keys and paths to xa.DataArrays produced by make_quantile_map_array as values.
+
+    gmt : pandas DataFrame for the global mean temperature, with years as index and ensemble members as columns
+
+    region: string, region to make the prediction for
+
+    indicator: string, indicator to make the prediction for
+
+    samples : number of samples to draw (default: 100)
+
+    seed : random seed
+
+    quantiles : quantiles to compute (default: [0.5, .05, .95])
+        if None, all ensemble members are returned
+
+    mode : {"deterministic", "factorial", "montecarlo"}
+        - "deterministic" (the default): gmt is resampled deterministically
+        - "montecarlo" : gmt is simply resampled (may speed-up the computation at the cost of some loss of precision)
+        - "factorial" : gmt is combined with the quantile map in a factorial way
+            The total number of samples is then samples * gmt.shape[1]
+        Note the impact distribution is always resampled in a deterministic way
+
+    clip : bool
+        if True, clip the GMT data to the range of the quantile map, otherwise fill with NaNs
+        False by default
+
+    skipna : bool
+        if True, skip NaN values in the quantiles calculation (default: False)
+        can be useful if clip is set to False
+
+    Returns
+    -------
+    sampled_maps : xa.DataArray with dimensions year, sample
+    """
+    predictions = []
+    
+    for year, quantile_map_path in quantile_maps.items():
+        
+        relevant_gmt = gmt.loc[[year]]
+        
+        with xa.open_dataset(quantile_map_path) as ds:
+            relevant_quantile_map = ds[indicator].sel(region=region).load()
+        
+        prediction = make_quantilemap_prediction(relevant_quantile_map, relevant_gmt, samples=samples, seed=seed, quantiles=quantiles, mode=mode, clip=clip, skipna=skipna)
+        
+        predictions.append(prediction)
+
+    sampled_maps = xa.concat(predictions, dim = 'year')
+    
+    return sampled_maps
+        
+
+
+    
+def make_quantilemap_prediction(a, gmt, samples=100, seed=42, quantiles=[0.5, .05, .95], mode="deterministic", clip=False, skipna=False):
+    """Make a prediction of the quantile map for a given global mean temperature
+
+    Parameters
+    ----------
+    a : xa.DataArray as produced by make_quantile_map_array
+
+    gmt : pandas DataFrame for the global mean temperature, with years as index and ensemble members as columns
+
+    samples : number of samples to draw (default: 100)
+
+    seed : random seed
+
+    quantiles : quantiles to compute (default: [0.5, .05, .95])
+        if None, all ensemble members are returned
+
+    mode : {"deterministic", "factorial", "montecarlo"}
+        - "deterministic" (the default): gmt is resampled deterministically
+        - "montecarlo" : gmt is simply resampled (may speed-up the computation at the cost of some loss of precision)
+        - "factorial" : gmt is combined with the quantile map in a factorial way
+            The total number of samples is then samples * gmt.shape[1]
+        Note the impact distribution is always resampled in a deterministic way
+
+    clip : bool
+        if True, clip the GMT data to the range of the quantile map, otherwise fill with NaNs
+        False by default
+
+    skipna : bool
+        if True, skip NaN values in the quantiles calculation (default: False)
+        can be useful if clip is set to False
+
+    Returns
+    -------
+    sampled_maps : xa.DataArray with dimensions year, sample
+    """
+    assert tuple(a.dims[:2]) == ("warming_level", "quantile"), f"Expected dimensions ('warming_level', 'quantile'), got {a.dims[:2]}"
+    rng = np.random.default_rng(seed=seed)
+
+    if clip:
+        gmt = gmt.clip(lower=a.coords["warming_level"].values[0], upper=a.coords["warming_level"].values[-1])
+
+    if mode == "deterministic":
+        gmt_quants = equally_spaced_quantiles(samples)
+        resampled_gmt = np.quantile(gmt.values, gmt_quants, axis=1).T
+
+        resampled_quantiles = equally_spaced_quantiles(samples)
+        rng.shuffle(resampled_quantiles)
+
+    elif mode == "montecarlo":
+        igmt = rng.integers(0, gmt.columns.size, size=samples)
+        resampled_gmt = gmt.values[:, igmt]
+
+        iquantiles = rng.integers(0, a.coords["quantile"].size, size=resampled_gmt.shape)
+        resampled_quantiles = a.coords["quantile"].values[iquantiles]
+
+    elif mode == "factorial":
+        samples = gmt.shape[1] * a.coords["quantile"].size
+        resampled_gmt = gmt.values[:, :, None].repeat(a.coords["quantile"].size, axis=2).reshape(gmt.shape[0], -1)
+        resampled_quantiles = a.coords["quantile"].values[None, None, :].repeat(gmt.shape[0], axis=0).repeat(gmt.shape[1], axis=1).reshape(gmt.shape[0], -1)
+
+    else:
+        raise ValueError(f"Unknown mode {mode}")
+
+    # joint sampling of GMT and impact distribution
+    interp = RegularGridInterpolator((a.warming_level.values, a.coords["quantile"].values), a.values, bounds_error=False)
+    sampled_maps = interp((resampled_gmt, resampled_quantiles))
+
+    # create the output DataArray
+    trailing_dims = a.dims[2:]
+    sampled_maps = xa.DataArray(sampled_maps, coords=[
+        gmt.index, np.arange(samples), *(a.coords[d] for d in trailing_dims)], dims=["year", "sample", *trailing_dims])
+
+    # compute quantiles
+    if quantiles is not None:
+        sampled_maps = fast_quantile(sampled_maps, quantiles, dim="sample", skipna=skipna)
+
+    return sampled_maps
+
+
+def _loop(o, indicator, warming_levels, season, mode, open_func_kwargs, filepath):
+    if filepath.exists() and not o.overwrite:
+        logger.info(f"{filepath} already exists. Use -O or --overwrite to reprocess.")
+        return
+    # to reduce the memory usage, it is possible to split the calls into smaller warming_levels chunks
+    # and concat along the warming level dimension afterwards (it will be less efficient)
+    if mode == "map" and o.map_chunk_size is not None:
+        make_quantile_map_array_ = chunked("lat", o.map_chunk_size, 360)(make_quantile_map_array)
+    else:
+        make_quantile_map_array_ = make_quantile_map_array
+    try:
+        array = make_quantile_map_array_(indicator,
+                                        warming_levels,
+                                        season=season,
+                                        quantile_bins=o.quantile_bins,
+                                        running_mean_window=o.running_mean_window,
+                                        projection_baseline=o.projection_baseline,
+                                        equiprobable_models=o.equiprobable_climate_models,
+                                        skip_nans=o.skip_nans,
+                                        use_all_timesteps=o.use_all_timesteps,
+                                        manual_model_weights=o.manual_model_weights,  # NEW
+                                        open_func_kwargs=open_func_kwargs,
+                                        )
+    except Exception as error:
+        if mode == "regional":
+            logger.warning(error)
+            logger.warning(f"Failed to process {indicator.name}")
+            # raise
+            return
+        raise
+    logger.info(f"Write to {filepath}")
+    filepath.parent.mkdir(parents=True, exist_ok=True)
+    encoding = {array.name: {'zlib': True}}
+    array.to_netcdf(filepath, encoding=encoding)
+
+
+def make_quantilemaps(indicator, season=None, warming_level_file=None, warming_levels=None,
+                       quantile_bins=None, running_mean_window=None, equiprobable_climate_models=True,
+                       simulation_round=None, projection_baseline=None, skip_transform=False,
+                       regional=False, regional_no_admin=False, map=False, map_chunk_size=None,
+                       weight="latWeight", region=None, overwrite=False, suffix="", auto_suffix=True,
+                       skip_nans=False, use_all_timesteps=False, manual_model_weights=None, cpus=None):  # NEW
+    """Compute quantile maps for one or more indicators.
+    Importable equivalent of the `rime-preproc-quantilemaps` CLI tool -- call this
+    directly from a notebook instead of shelling out to the command line.
+    Parameters
+    ----------
+    indicator : str or list[str]
+        Indicator name(s) to process, e.g. "heating-degree-days" or ["tas", "pr"]
+    season : str or list[str], optional
+        Season(s) to process (e.g. "annual", "summer"). Defaults to all seasons in `preprocessing.seasons`.
+        Ignored (skipped) for indicators with `frequency == "annual"` unless season == "annual".
+    warming_level_file : str, optional
+        Path to the warming levels CSV. Defaults to the file resolved by `get_warming_level_file`.
+    warming_levels : list[float], optional
+        Subset of warming levels to process. Defaults to all warming levels in the file.
+    quantile_bins : int, optional
+        Number of quantile bins. Defaults to `preprocessing.quantilemap_quantile_bins`.
+    running_mean_window : int, optional
+        Running-mean window size (years). Defaults to `preprocessing.running_mean_window`.
+    equiprobable_climate_models : bool
+        Downweight models that appear more often in the warming-level selection, so every model
+        contributes equally to each warming-level bin. Default True.
+    simulation_round : list[str], optional
+        ISIMIP simulation round(s) to use. Defaults to `isimip.simulation_round`.
+    projection_baseline : (int, int), optional
+        Baseline period for the indicator transform. Defaults to `preprocessing.projection_baseline`.
+    skip_transform : bool
+        If True, use the indicator's absolute values instead of its baseline-relative transform.
+    regional : bool
+        Write one file per region, including admin boundaries.
+    regional_no_admin : bool
+        Write a single merged file across all regions (no admin boundaries).
+    map : bool
+        Write lat/lon gridded quantile maps.
+    map_chunk_size : int, optional
+        Process lat/lon maps in latitude chunks of this size, to limit memory usage.
+    weight : str
+        Regional weighting scheme to use for `regional`/`regional_no_admin` modes. Default "latWeight".
+    region : list[str], optional
+        Regions to process for `regional` mode. Defaults to all regions found via `get_all_regions()`.
+    overwrite : bool
+        Recompute and overwrite existing output files.
+    suffix : str
+        Suffix appended to output filenames.
+    auto_suffix : bool
+        Automatically extend `suffix` to reflect any non-default processing options used.
+    use_all_timesteps : bool
+        If True, use every raw timestep within the (season-filtered) year as a separate
+        sample instead of averaging the year down to one smoothed value. Default False.
+    manual_model_weights : dict, optional
+        Optional per-model scaling factors, passed straight through to every
+        `make_quantile_map_array` call this function makes (one per
+        indicator/season/region/mode combination). See `make_quantile_map_array`'s
+        `manual_model_weights` parameter for the full semantics (case-insensitive
+        keys, non-negative values enforced, missing models raise `KeyError` up
+        front). Default None (no manual weighting).
+    skip_nans : bool
+        Skip NaN values when computing quantiles.
+    cpus : int, optional
+        Number of parallel worker processes (used when processing multiple regions/files at once).
+    Returns
+    -------
+    list[Path]
+        Paths of all output files that were (or would have been) written.
+    """
+    if running_mean_window is None:
+        running_mean_window = CONFIG["preprocessing.running_mean_window"]
+    if quantile_bins is None:
+        quantile_bins = CONFIG["preprocessing.quantilemap_quantile_bins"]
+    if warming_levels is None:
+        warming_levels = CONFIG.get("preprocessing.quantilemap_warming_levels")
+    if simulation_round is None:
+        simulation_round = CONFIG["isimip.simulation_round"]
+    if projection_baseline is None:
+        projection_baseline = CONFIG["preprocessing.projection_baseline"]
+    if season is None:
+        season = list(CONFIG["preprocessing.seasons"])
+    elif isinstance(season, str):
+        season = [season]
+    if isinstance(indicator, str):
+        indicator = [indicator]
+    o = argparse.Namespace(
+        running_mean_window=running_mean_window, warming_level_file=warming_level_file,
+        warming_levels=warming_levels, quantile_bins=quantile_bins,
+        equiprobable_climate_models=equiprobable_climate_models, indicator=indicator, season=season,
+        simulation_round=simulation_round, projection_baseline=projection_baseline,
+        skip_transform=skip_transform, regional=regional, regional_no_admin=regional_no_admin, map=map,
+        map_chunk_size=map_chunk_size, weight=weight, region=region, overwrite=overwrite, suffix=suffix,
+        auto_suffix=auto_suffix, skip_nans=skip_nans, use_all_timesteps=use_all_timesteps,
+        manual_model_weights=manual_model_weights, cpus=cpus,  # NEW
+    )
+    if o.auto_suffix:
+        parts = []
+        if o.skip_transform:
+            parts.append("abs")
+        if o.running_mean_window != CONFIG["preprocessing.running_mean_window"]:
+            parts.append(f"rmw{o.running_mean_window}")
+        if o.warming_levels is not None:
+            parts.append(f"wl{len(o.warming_levels)}")
+        if o.quantile_bins != CONFIG["preprocessing.quantilemap_quantile_bins"]:
+            parts.append(f"qb{o.quantile_bins}")
+        if o.equiprobable_climate_models:
+            parts.append("eq")
+        if o.use_all_timesteps:
+            parts.append("allts")
+        if o.manual_model_weights:
+            parts.append("mw")
+        if len(parts) > 0:
+            o.suffix += "_" + "-".join(parts)
+    CONFIG["isimip.simulation_round"] = o.simulation_round
+    CONFIG["preprocessing.projection_baseline"] = o.projection_baseline
+    if o.region is None:
+        o.region = get_all_regions()
+    if o.warming_level_file is None:
+        o.warming_level_file = get_warming_level_file(**{**CONFIG, **vars(o)})
+    warming_levels_df = pd.read_csv(o.warming_level_file)
+    if o.warming_levels is not None:
+        quantilemap_warming_levels = np.asarray(o.warming_levels)
+        warming_levels_df = warming_levels_df[warming_levels_df["warming_level"].isin(quantilemap_warming_levels)]
+    root_dir = Path(o.warming_level_file).parent
+    output_files = []
+    for name in o.indicator:
+        ind = Indicator.from_config(name, **({"transform": None} if o.skip_transform else {}))
+        for s in o.season:
+            if ind.frequency == "annual" and s != "annual":
+                continue
+            for mode in ["regional_no_admin", "regional", "map"]:
+                if not getattr(o, mode):
+                    continue
+                if mode == "regional":
+                    open_func_kwargs_loop = [dict(region=r, regional_weight=o.weight) for r in o.region]
+                    files = [get_filepath(ind.name, s, root_dir=root_dir, suffix=o.suffix,
+                                           region=r, regional_weight=o.weight) for r in o.region]
+                else:
+                    regional_flag = mode in ["regional_no_admin", "regional"]
+                    open_func_kwargs_loop = [dict(regional=regional_flag, regional_weight=o.weight)]
+                    files = [get_filepath(ind.name, s, root_dir=root_dir, suffix=o.suffix,
+                                           regional=regional_flag, regional_weight=o.weight)]
+                if len(open_func_kwargs_loop) > 1 and o.cpus and o.cpus > 1:
+                    import concurrent.futures
+                    cpus_ = min(o.cpus, len(open_func_kwargs_loop))
+                    executor = concurrent.futures.ProcessPoolExecutor(max_workers=cpus_)
+                else:
+                    executor = argparse.Namespace(submit=lambda f, *args, **kwargs: f(*args, **kwargs))
+                jobs = [executor.submit(_loop, o, ind, warming_levels_df, s, mode, open_func_kwargs, filepath)
+                        for filepath, open_func_kwargs in zip(files, open_func_kwargs_loop)]
+                for job in jobs:
+                    if job is not None:
+                        job.result()
+                output_files.extend(files)
+    return output_files
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__, epilog="", formatter_class=argparse.RawDescriptionHelpFormatter, parents=[config_parser, log_parser])
+
+    group = parser.add_argument_group('Warming level matching')
+    group.add_argument("--running-mean-window", default=CONFIG["preprocessing.running_mean_window"], help="default: %(default)s years")
+    group.add_argument("--warming-level-file", default=None)
+    group.add_argument("--warming-levels", type=float, default=CONFIG.get("preprocessing.quantilemap_warming_levels"), nargs='+', help="All warming levels by default")
+    group.add_argument("--quantile-bins", default=CONFIG["preprocessing.quantilemap_quantile_bins"], type=int, help="default: %(default)s")
+
+    egroup = group.add_mutually_exclusive_group()
+    egroup.add_argument("--no-equiprobable-climate-models", action='store_false', dest="equiprobable_climate_models",
+                       help="Do not downweight models that are more frequent in the warming level selection")
+    egroup.add_argument("--equiprobable-climate-models", action='store_true', help=argparse.SUPPRESS)
+
+    group = parser.add_argument_group('Indicator variable')
+    all_variables = list(CONFIG["isimip.variables"]) + sorted(set(v.split(".")[0] for v in CONFIG["indicator"]))
+    group.add_argument("-i", "--indicator", nargs='+', default=[], choices=all_variables)
+    group.add_argument("--season", nargs="+", default=list(CONFIG["preprocessing.seasons"]), choices=list(CONFIG["preprocessing.seasons"]))
+    group.add_argument("--simulation-round", nargs="+", default=CONFIG["isimip.simulation_round"], help="default: %(default)s")
+    group.add_argument("--projection-baseline", default=CONFIG["preprocessing.projection_baseline"], type=int, nargs=2, help="default: %(default)s")
+    group.add_argument("--skip-transform", action='store_true', help="Skip the transformation of the indicator (absolute indicator only)")
+    group.add_argument("--regional", action='store_true', help="Process regional averages (one file per region including admin boundaries)")
+    group.add_argument("--regional-no-admin", action='store_true', help="Process merged regional averages without admin boundaries")
+    group.add_argument("--map", action='store_true', help="Process lat/lon maps")
+    group.add_argument("--map-chunk-size", type=int, choices=[5, 10, 36, 60, 72, 90, 180], help="Process maps in smaller chunk to save memory usage (lat range = 360)")
+    group.add_argument("--use-all-timesteps", action='store_true',
+                    help="Use every raw timestep within the (season-filtered) year as a separate sample instead of averaging the year down to one value")
+
+    group = parser.add_argument_group('Regional average variables')
+    group.add_argument("--weight", default="latWeight", choices=CONFIG["preprocessing.regional.weights"], help="default: %(default)s")
+    group.add_argument("--region", nargs="+", default=None, choices=get_all_regions(), help="Regions to process if --regional")
+
+    parser.add_argument("-O", "--overwrite", action='store_true')
+    parser.add_argument("--suffix", default="", help="add suffix to the output file name (to reflect different processing options)")
+    parser.add_argument("--no-auto-suffix", action='store_false', dest="auto_suffix", help="add an automatically-generated suffix to the output file name (to reflect different processing options)")
+    parser.add_argument("--skip-nans", action='store_true', help="Skip NaN values in the quantile map calculation")
+    parser.add_argument("--cpus", type=int)
+
+    o = parser.parse_args()
+
+    make_quantilemaps(
+        indicator=o.indicator, season=o.season, warming_level_file=o.warming_level_file,
+        warming_levels=o.warming_levels, quantile_bins=o.quantile_bins,
+        running_mean_window=o.running_mean_window, equiprobable_climate_models=o.equiprobable_climate_models,
+        simulation_round=o.simulation_round, projection_baseline=o.projection_baseline,
+        skip_transform=o.skip_transform, regional=o.regional, regional_no_admin=o.regional_no_admin,
+        map=o.map, map_chunk_size=o.map_chunk_size, weight=o.weight, region=o.region,
+        overwrite=o.overwrite, suffix=o.suffix, auto_suffix=o.auto_suffix, skip_nans=o.skip_nans, use_all_timesteps = o.use_all_timesteps, cpus=o.cpus,
+    )
+
+
+if __name__ == "__main__":
+    main()
+'''
+def main():
+    import argparse
+    parser = argparse.ArgumentParser(description=__doc__, epilog="""""", formatter_class=argparse.RawDescriptionHelpFormatter, parents=[config_parser, log_parser])
+
+    group = parser.add_argument_group('Warming level matching')
+    group.add_argument("--running-mean-window", default=CONFIG["preprocessing.running_mean_window"], help="default: %(default)s years")
+    group.add_argument("--warming-level-file", default=None)
+    group.add_argument("--warming-levels", type=float, default=CONFIG.get("preprocessing.quantilemap_warming_levels"), nargs='+', help="All warming levels by default")
+    group.add_argument("--quantile-bins", default=CONFIG["preprocessing.quantilemap_quantile_bins"], type=int, help="default: %(default)s")
+
+    egroup = group.add_mutually_exclusive_group()
+    egroup.add_argument("--no-equiprobable-climate-models", action='store_false', dest="equiprobable_climate_models",
+                       help="Do not downweight models that are more frequent in the warming level selection")  # equiprobable climate models by default when --no-equi... comes before --equi definition
+    egroup.add_argument("--equiprobable-climate-models", action='store_true', help=argparse.SUPPRESS)
+
+    group = parser.add_argument_group('Indicator variable')
+    all_variables = list(CONFIG["isimip.variables"]) + sorted(set(v.split(".")[0] for v in CONFIG["indicator"]))
+    # group.add_argument("-v", "--variable", nargs='+', default=[], choices=CONFIG["isimip.variables"])
+    group.add_argument("-i", "--indicator", nargs='+', default=[], choices=all_variables)
+    group.add_argument("--season", nargs="+", default=list(CONFIG["preprocessing.seasons"]), choices=list(CONFIG["preprocessing.seasons"]))
+    group.add_argument("--simulation-round", nargs="+", default=CONFIG["isimip.simulation_round"], help="default: %(default)s")
+    group.add_argument("--projection-baseline", default=CONFIG["preprocessing.projection_baseline"], type=int, nargs=2, help="default: %(default)s")
+    group.add_argument("--skip-transform", action='store_true', help="Skip the transformation of the indicator (absolute indicator only)")
+    group.add_argument("--regional", action='store_true', help="Process regional averages (one file per region including admin boundaries)")
+    group.add_argument("--regional-no-admin", action='store_true', help="Process merged regional averages without admin boundaries")
+    group.add_argument("--map", action='store_true', help="Process lat/lon maps")
+    group.add_argument("--map-chunk-size", type=int, choices=[5, 10, 36, 60, 72, 90, 180], help="Process maps in smaller chunk to save memory usage (lat range = 360)")
+
+    group = parser.add_argument_group('Regional average variables')
+    group.add_argument("--weight", default="latWeight", choices=CONFIG["preprocessing.regional.weights"], help="default: %(default)s")
+    group.add_argument("--region", nargs="+", default=None, choices=get_all_regions(), help="Regions to process if --regional")
+
+    parser.add_argument("-O", "--overwrite", action='store_true')
+    parser.add_argument("--suffix", default="", help="add suffix to the output file name (to reflect different processing options)")
+    parser.add_argument("--no-auto-suffix", action='store_false', dest="auto_suffix", help="add an automatically-generated suffix to the output file name (to reflect different processing options)")
+    parser.add_argument("--skip-nans", action='store_true', help="Skip NaN values in the quantile map calculation")
+    parser.add_argument("--cpus", type=int)
+
+    # group = parser.add_argument_group('Result')
+    # group.add_argument("--backend", nargs="+", default=CONFIG["preprocessing.isimip_binned_backend"], choices=["csv", "feather"])
+    # group.add_argument("-O", "--overwrite", action='store_true')
+    # group.add_argument("--cpus", type=int)
+
+    o = parser.parse_args()
+
+    if o.auto_suffix:
+        parts = []
+        if o.skip_transform:
+            parts.append("abs")
+        if o.running_mean_window != CONFIG["preprocessing.running_mean_window"]:
+            parts.append(f"rmw{o.running_mean_window}")
+        if o.warming_levels is not None:
+            parts.append(f"wl{len(o.warming_levels)}")
+        if o.quantile_bins != CONFIG["preprocessing.quantilemap_quantile_bins"]:
+            parts.append(f"qb{o.quantile_bins}")
+        if o.equiprobable_climate_models:
+            parts.append("eq")
+        if len(parts) > 0:
+            o.suffix += "_" + "-".join(parts)
+
+    CONFIG["isimip.simulation_round"] = o.simulation_round
+    CONFIG["preprocessing.projection_baseline"] = o.projection_baseline
+
+    if o.region is None:
+        o.region = get_all_regions()
+
+    if o.warming_level_file is None:
+        o.warming_level_file = get_warming_level_file(**{**CONFIG, **vars(o)})
+
+    warming_levels = pd.read_csv(o.warming_level_file)
+
+    if o.warming_levels is not None:
+        quantilemap_warming_levels = np.asarray(o.warming_levels)
+        warming_levels = warming_levels[warming_levels["warming_level"].isin(quantilemap_warming_levels)]
+
+    root_dir = Path(o.warming_level_file).parent
+
+    for name in o.indicator:
+        indicator = Indicator.from_config(name, **{"transform": None} if o.skip_transform else {})
+
+        for season in o.season:
+            if indicator.frequency == "annual" and season != "annual":
+                continue
+
+            for mode in ["regional_no_admin", "regional", "map"]:
+                if not getattr(o, mode):
+                    continue
+
+                if mode == "regional":
+                    # in that mode loop over all regions and create a file for each, including admin boundaries
+                    open_func_kwargs_loop = [ dict( region=region, regional_weight=o.weight, ) for region in o.region ]
+
+                    files = [get_filepath(indicator.name, season, root_dir=root_dir, suffix=o.suffix,
+                                            region=region, regional_weight=o.weight) for region in o.region]
+
+                else:
+                    # in these modes, create a single file for all regions, without admin boundaries, or a single file for the lat/lon maps
+                    regional = mode in ["regional_no_admin", "regional"]
+                    open_func_kwargs_loop = [dict( regional=regional, regional_weight=o.weight, )]
+                    files = [get_filepath(indicator.name, season, root_dir=root_dir, suffix=o.suffix,
+                                        regional=regional, regional_weight=o.weight)]
+
+                if len(open_func_kwargs_loop) > 1 and o.cpus and o.cpus > 1:
+                    import concurrent.futures
+                    cpus = min(o.cpus, len(open_func_kwargs_loop))
+                    executor = concurrent.futures.ProcessPoolExecutor(max_workers=cpus)
+                else:
+                    executor = argparse.Namespace(submit=lambda f, *args, **kwargs: f(*args, **kwargs))
+
+                jobs = []
+
+                for filepath, open_func_kwargs in zip(files, open_func_kwargs_loop):
+                    jobs.append(executor.submit(_loop, o, indicator, warming_levels, season, mode, open_func_kwargs, filepath))
+
+                for job in jobs:
+                    if job is not None:
+                        job.result()
+
+if __name__ == "__main__":
+    main()
+
+"""
+Patched version of make_quantile_map_array with a new `use_all_timesteps` flag.
+
+Drop this in place of the existing function in rimeX/preproc/quantilemaps.py.
+All changes are marked with "# NEW" / "# CHANGED" comments so you can also
+hand-patch your own copy instead of replacing the whole function.
+
+Behavior when use_all_timesteps=False (the default) is byte-for-byte
+identical to the original function.
+"""
+
+def make_quantile_map_array(indicator:Indicator, warming_levels:pd.DataFrame,
+                            quantile_bins=21, season="annual", running_mean_window=21,
+                            projection_baseline=None, equiprobable_models=True,
                             skip_nans=False, open_func_kwargs={}, warming_level_simulation_key=None,
+                            wl_to_indicator_mapping = {"experiment": "climate_scenario", "model": "climate_forcing"},
+                            use_all_timesteps=False,  # NEW
+                            ):
+    """
+    Compute quantile maps for a given indicator and warming levels
+
+    Parameters
+    ----------
+    indicator : GenericIndicator instance
+        It contains information about which files to open and how to transform the data.
+        This is typically obtained via `rimeX.download_isimip.Indicator.from_config("<indicator_name>")`
+    warming_levels : pd.DataFrame
+        DataFrame with the warming levels to compute the quantile maps for.
+        The columns must contain the following keys:
+        - "warming_level" : the warming level (in degrees)
+        - "year" : the year of the warming level
+        - "model" : the model name
+        - "experiment" : the experiment name
+        - "ensemble" : the ensemble member (optional)
+        - "realization" : the realization (optional)
+        The DataFrame must be sorted by "warming_level" and "year".
+        The DataFrame must contain the same columns as the simulations in the indicator.
+        The DataFrame must contain the same columns as the simulations in the indicator.
+    quantile_bins : int
+        Number of quantile bins to compute. Default is 21.
+    season : str
+        The season to compute the quantile maps for. Default is "annual".
+        Ignored for the per-warming-level sample extraction when `use_all_timesteps=True`
+        (see below) -- it is still used for the reference-period baseline (`dataref`).
+    running_mean_window : int
+        The window size for the running mean. Default is 21.
+        Ignored when `use_all_timesteps=True` (see below).
+    projection_baseline : tuple
+        The projection baseline period to use for the transformation. Default is None.
+    equiprobable_models : bool
+        If True, the models are weighted equally within each warming level bin,
+        regardless of the number of data points (scenarios, time slices) contributed by each model. Default is True.
+    skip_nans : bool
+        If True, skip NaN values in the quantile maps. Default is False.
+    open_func_kwargs : dict
+        Additional keyword arguments to pass to the open function of the indicator (e.g. regional, regional_weight, isel...).
+    warming_level_simulation_key : list
+        The keys to identify the warming level simulation (default: ["model", "experiment", "ensemble"]
+        if "ensemble" is present in the warming level file otherwise ["model", "experiment"] )
+        The keys must be present in the warming levels DataFrame and the simulations of the indicator.
+    wl_to_indicator_mapping : dict
+        A mapping of the warming level keys to the indicator keys. Default is {"experiment": "climate_scenario", "model": "climate_forcing"}.
+        The keys must be present in the warming levels DataFrame.
+        The keys must be present in the simulations of the indicator.
+    use_all_timesteps : bool  # NEW
+        If True, for each warming-level/year, use every raw timestep within that
+        calendar year as a separate sample for the quantile calculation, instead of
+        applying the seasonal selection + averaging + running-mean smoothing pipeline
+        to collapse the year down to a single value per simulation.
+        This adds a "sample" dimension of variable length per simulation (e.g. 12
+        for monthly data, ~365 for daily data) instead of contributing exactly one
+        value per simulation per warming level. Model weighting (`equiprobable_models`)
+        still works out to the same total weight per model, since the per-timestep
+        weights are `1 / model_frequencies[model]` where `model_frequencies` now counts
+        raw timesteps rather than simulations.
+        The reference-period baseline (`dataref`, used for the indicator's transform)
+        is unaffected and still computed from the seasonally-selected annual mean.
+        Default is False, which reproduces the original behavior exactly.
+
+    Returns
+    -------
+    warming_level_data : xa.DataArray
+        The quantile maps for the given indicator and warming levels.
+        The DataArray has the following dimensions:
+        - "warming_level" : the warming level (in degrees)
+        - "quantile" : the quantile (0.0 to 1.0)
+        - "lat" : the latitude
+        - "lon" : the longitude
+        The DataArray has the same coordinates as the indicator.
+        The DataArray has the same attributes as the indicator.
+        The DataArray has the same units as the indicator.
+    """
+    simulations = indicator.simulations
+    all_experiments = sorted(set(simu["climate_scenario"] for simu in simulations))
+    w = running_mean_window // 2 if running_mean_window // 2 >= 1 else 1#w = running_mean_window // 2
+    quants = np.linspace(0, 1, quantile_bins)
+    if warming_level_simulation_key is None:
+        required_keys = ["model", "experiment"]
+        optional_keys = ["ensemble", "realization"]
+        warming_level_simulation_key = required_keys + [k for k in optional_keys if k in warming_levels.columns]
+    # use lower-case to avoid case issues
+    warming_levels = warming_levels.copy()
+    for key in warming_level_simulation_key:
+        assert key in warming_levels.columns, f"Missing key {key} in warming levels"
+        warming_levels[key] = warming_levels[key].map(str.lower)
+    # group the warming levels by simulation key (model, scenario, ensemble)
+    key_func_wl = lambda r: tuple(r[k] for k in warming_level_simulation_key)
+    warming_level_by_model_exp = {k: list(group) for k, group in groupby(sorted(warming_levels.to_dict(orient="records"), key=key_func_wl), key=key_func_wl)}
+    keywl = lambda r: r["warming_level"]
+    wl_records = sorted(warming_levels.to_dict(orient="records"), key=keywl)
+    logger.info(f"Collect quantile maps data for {indicator.name} | {season}. Warming levels {wl_records[0]['warming_level']} to {wl_records[-1]['warming_level']}")
+    # any situation where that could be relaxed to r.get(...) ? (e.g. ensemble is present in the warming level file but not in the indicator simulations)
+    key_func = lambda r: tuple(r[wl_to_indicator_mapping.get(k, k)] for k in warming_level_simulation_key)
+    collect = {}
+    for simu in tqdm.tqdm(simulations):
+        key = key_func(simu)
+        key_meta = dict(zip([wl_to_indicator_mapping.get(k, k) for k in warming_level_simulation_key], key))
+        if simu[wl_to_indicator_mapping.get("experiment", "experiment")] == "historical":
+            continue # this will be covered by the projection
+        simu_historical = {**simu, wl_to_indicator_mapping.get("experiment", "experiment"): "historical"}
+        # check if that simulaion is required
+        if key not in warming_level_by_model_exp:
+            logger.debug(f"No warming level calculation for {key_meta}: Skip")
+            continue
+        wl_data_points = warming_level_by_model_exp[key]
+        if "historical" in all_experiments:
+            data = xa.concat([indicator.open_simulation(**simu_, **open_func_kwargs) for simu_ in [simu_historical, simu]], dim="time")
+        else:
+            data = indicator.open_simulation(**simu, **open_func_kwargs)
+        with data:
+            raw_data = data  # NEW: stable reference to the full timeseries -- `data` gets reassigned per warming-level below
+            # this is used for model-weighting
+            model = simu[wl_to_indicator_mapping.get("model", "model")]
+            # only select relevant months
+            if season is not None:
+                season_mask = data["time.month"].isin(CONFIG["preprocessing.seasons"][season])
+                seasonal_sel = data.isel(time=season_mask)
+            else:
+                seasonal_sel = data
+            # need to convert certain variables to float
+            if seasonal_sel.dtype.name.startswith("timedelta"):
+                seasonal_sel = seasonal_sel.load()
+                seasonal_sel.values = seasonal_sel.values.astype("timedelta64[D]").astype(float)
+            # crunch anual mean
+            annual_mean = seasonal_sel.groupby("time.year").mean()
+            # subtract the reference period or express as relative change
+            if getattr(indicator, "transform", None) and projection_baseline is not None:
+                y1, y2 = projection_baseline
+                dataref = annual_mean.sel(year=slice(y1, y2)).mean("year").load()
+                assert np.isfinite(dataref.values).any(), key_meta
+            # make 21-year running mean
+            # we require at least half full to have non-nans values
+            if not use_all_timesteps:  # CHANGED: skip smoothing entirely, it's unused in the new mode
+                data_smooth = annual_mean.rolling(year=running_mean_window, center=True, min_periods=w).mean().load()
+            # assert np.isfinite(data_smooth.values).any(), key
+            # collect all time slices required for the warming levels
+            for wl_data_point in wl_data_points:
+                year = wl_data_point["year"]
+                wl = wl_data_point["warming_level"]
+                # mean over required time-slice
+                # data = seasonal_sel.sel(time=slice(str(year-w),str(year+w))).mean("time").load()
+                if use_all_timesteps:  # NEW branch: raw timesteps instead of seasonal-mean + smoothing
+                    year_mask = raw_data["time.year"] == year
+                    if not bool(year_mask.any()):
+                        logger.warning(f"{indicator.name} | Missing year {year} in {key_meta}")
+                        continue
+                    data = raw_data.isel(time=year_mask).load()
+                    if data.dtype.name.startswith("timedelta"):
+                        data.values = data.values.astype("timedelta64[D]").astype(float)
+                    if not np.isfinite(data.values).any():
+                        logger.debug(f"All NaNs: {(wl, year, simu)}")
+                        continue
+                    # keep every raw timestep as its own sample instead of averaging them away
+                    data = data.rename({"time": "sample"}).drop_vars("sample")
+                else:
+                    try:
+                        data = data_smooth.sel(year=year).load()
+                    except KeyError:
+                        logger.warning(f"{indicator.name} | Missing year {year} in {key_meta}")
+                        continue
+                    if not np.isfinite(data.values).any():
+                        logger.debug(f"All NaNs: {(wl, year, simu)}")
+                        continue
+                    assert "year" not in data.dims, (data.dims, data.shape)
+                # subtract the reference period or express as relative change
+                if getattr(indicator, "transform", None):
+                    data = transform_indicator(data, indicator.name, dataref=dataref).load()
+                # assign metadata
+                data = data.assign_coords({
+                    "warming_level": wl,
+                    "midyear": year,
+                    **key_meta
+                    })
+                assert "time" not in data.dims, (data.dims, data.shape)
+                # experiment = simu[wl_to_indicator_mapping.get("scenario", "scenario")]
+                # append the newly calculated data where it belongs
+                values, models = collect.setdefault(wl, ([], []))
+                values.append(data)
+                n_new_samples = data.sizes.get("sample", 1)  # CHANGED: was `models.append(model)`
+                models.extend([model] * n_new_samples)
+                if "sample" in data.dims:  # NEW: keep `data` as a scalar-shaped template like the non-flagged path,
+                    data = data.isel(sample=0, drop=True)  # so the post-loop shape logic below still works unchanged
+    logger.info(f"Compute quantiles for collected data {indicator.name} | {season}.")
+    warming_level_coords = np.array(sorted(collect.keys()))
+    # create an empty array to store the quantiles
+    warming_level_data = xa.DataArray(np.empty((len(warming_level_coords), len(quants), *data.shape)),
+                                      dims=["warming_level", "quantile", *data.dims],
+                                      coords={
+                                        "warming_level": warming_level_coords,
+                                        "quantile": quants,
+                                        **{k:data.coords[k] for k in data.dims},
+                                        },
+                                      name=indicator.name,
+                                      attrs={"units": getattr(indicator, "units", "")},
+                                      )
+    # now re-organize the collected values by warming level and calculate the quantiles
+    for i,wl in enumerate(tqdm.tqdm(warming_level_coords)):
+        values, models = collect.pop(wl)
+        model_frequencies = {model: len(list(group)) for model, group in groupby(sorted(models))}
+        weights = np.array([1/model_frequencies[model] if equiprobable_models else 1 for model in models])
+        samples = xa.concat(values, dim="sample")
+        del values  # clear memory
+        # quantiles = samples.quantile(quants, dim="sample")
+        assert np.any(np.isfinite(samples.values)), (wl, samples.shape)
+        if equiprobable_models:
+            quantiles = fast_weighted_quantile(samples, quants, weights=weights, dim="sample", skipna=skip_nans)
+        else:
+            quantiles = fast_quantile(samples, quants, dim="sample", skipna=skip_nans)
+        warming_level_data.values[i] = quantiles.transpose("quantile", ...).values
+        del samples # clear memory
+        del quantiles # clear memory
+    return warming_level_data
+
+def make_quantile_map_array(indicator:Indicator, warming_levels:pd.DataFrame,
+                            quantile_bins=21, season="annual", running_mean_window=21,
+                            projection_baseline=None, equiprobable_models=True,
+                            skip_nans=False, open_func_kwargs={}, warming_level_simulation_key=None,use_all_timesteps=False,
                             wl_to_indicator_mapping = {"experiment": "climate_scenario", "model": "climate_forcing"},
                             ):
     """
@@ -113,6 +1158,21 @@ def make_quantile_map_array(indicator:Indicator, warming_levels:pd.DataFrame,
         The keys to identify the warming level simulation (default: ["model", "experiment", "ensemble"]
         if "ensemble" is present in the warming level file otherwise ["model", "experiment"] )
         The keys must be present in the warming levels DataFrame and the simulations of the indicator.
+
+    use_all_timesteps : bool 
+        If True, for each warming-level/year, use every raw timestep within that
+        calendar year as a separate sample for the quantile calculation, instead of
+        applying the seasonal selection + averaging + running-mean smoothing pipeline
+        to collapse the year down to a single value per simulation.
+        This adds a "sample" dimension of variable length per simulation (e.g. 12
+        for monthly data, ~365 for daily data) instead of contributing exactly one
+        value per simulation per warming level. Model weighting (`equiprobable_models`)
+        still works out to the same total weight per model, since the per-timestep
+        weights are `1 / model_frequencies[model]` where `model_frequencies` now counts
+        raw timesteps rather than simulations.
+        The reference-period baseline (`dataref`, used for the indicator's transform)
+        is unaffected and still computed from the seasonally-selected annual mean.
+        Default is False, which reproduces the original behavior exactly.
 
     wl_to_indicator_mapping : dict
         A mapping of the warming level keys to the indicator keys. Default is {"experiment": "climate_scenario", "model": "climate_forcing"}.
@@ -295,554 +1355,4 @@ def make_quantile_map_array(indicator:Indicator, warming_levels:pd.DataFrame,
 
 
     return warming_level_data
-
-
-def chunked(dim, size, total_size):
-    """
-    Decorator to process the data in chunks
-    (e.g. call quantile maps on 1 or 5 or 10 degrees latitude bands to reduce memory usage)
-    """
-    def decorator(func):
-        def wrapped(indicator, warming_levels, open_func_kwargs={}, **kwargs):
-            chunks = []
-            for isel in range(0, total_size, size):
-                logger.info(f"Chunk along {dim}: {isel} to {isel+size} of {total_size}")
-                open_func_kwargs_ = {**open_func_kwargs, "isel": {dim: slice(isel, isel+size)}}
-                result = func(indicator, warming_levels, open_func_kwargs=open_func_kwargs_, **kwargs)
-                chunks.append(result)
-            return xa.concat(chunks, dim=dim)
-        return wrapped
-    return decorator
-
-
-def get_filepath(name, season="annual", root_dir=None, suffix="", region=None, regional=False,
-                 regional_weight="latWeight", regions=None, **kw):
-    if root_dir is None:
-        root_dir = get_root_directory(**kw)
-    if regional:
-        if regions is not None and regions != get_all_regions():
-            parts = []
-            if len(regions) == 1:
-                parts.append(f"r{regions[0].lower()}")
-            else:
-                parts.append(f"r{len(regions)}")
-            suffix += f"_{'-'.join(parts)}"
-        return root_dir / "quantilemaps_regional" / name / f"{name}_{season}_noadmin_{regional_weight.lower()}{suffix}.nc"
-    elif region is not None:
-        return root_dir / "quantilemaps_regional_admin" / name / region / f"{name}_{season}_{region.lower()}_{regional_weight.lower()}{suffix}.nc"
-    else:
-        return root_dir / "quantilemaps" / name / f"{name}_{season}_quantilemaps{suffix}.nc"
-
-def make_timesensitive_quantilemap_prediction(quantile_maps, gmt, region, indicator, samples=100, seed=42, quantiles=[0.5, .05, .95], mode="deterministic", clip=False, skipna=False):
-    """Make a prediction form the quantile map for a given global mean temperature using different quantile_maps per year. You can use this function to account for e.g. timesensitive weighting schemes in your emulation appearing when socioeconomic conditions change
-
-    Parameters
-    ----------
-    quantile_maps : dictionary with all years as keys and paths to xa.DataArrays produced by make_quantile_map_array as values.
-
-    gmt : pandas DataFrame for the global mean temperature, with years as index and ensemble members as columns
-
-    region: string, region to make the prediction for
-
-    indicator: string, indicator to make the prediction for
-
-    samples : number of samples to draw (default: 100)
-
-    seed : random seed
-
-    quantiles : quantiles to compute (default: [0.5, .05, .95])
-        if None, all ensemble members are returned
-
-    mode : {"deterministic", "factorial", "montecarlo"}
-        - "deterministic" (the default): gmt is resampled deterministically
-        - "montecarlo" : gmt is simply resampled (may speed-up the computation at the cost of some loss of precision)
-        - "factorial" : gmt is combined with the quantile map in a factorial way
-            The total number of samples is then samples * gmt.shape[1]
-        Note the impact distribution is always resampled in a deterministic way
-
-    clip : bool
-        if True, clip the GMT data to the range of the quantile map, otherwise fill with NaNs
-        False by default
-
-    skipna : bool
-        if True, skip NaN values in the quantiles calculation (default: False)
-        can be useful if clip is set to False
-
-    Returns
-    -------
-    sampled_maps : xa.DataArray with dimensions year, sample
-    """
-    predictions = []
-    
-    for year, quantile_map_path in quantile_maps.items():
-        
-        relevant_gmt = gmt.loc[[year]]
-        
-        with xa.open_dataset(quantile_map_path) as ds:
-            relevant_quantile_map = ds[indicator].sel(region=region).load()
-        
-        prediction = make_quantilemap_prediction(relevant_quantile_map, relevant_gmt, samples=samples, seed=seed, quantiles=quantiles, mode=mode, clip=clip, skipna=skipna)
-        
-        predictions.append(prediction)
-
-    sampled_maps = xa.concat(predictions, dim = 'year')
-    
-    return sampled_maps
-        
-
-
-    
-def make_quantilemap_prediction(a, gmt, samples=100, seed=42, quantiles=[0.5, .05, .95], mode="deterministic", clip=False, skipna=False):
-    """Make a prediction of the quantile map for a given global mean temperature
-
-    Parameters
-    ----------
-    a : xa.DataArray as produced by make_quantile_map_array
-
-    gmt : pandas DataFrame for the global mean temperature, with years as index and ensemble members as columns
-
-    samples : number of samples to draw (default: 100)
-
-    seed : random seed
-
-    quantiles : quantiles to compute (default: [0.5, .05, .95])
-        if None, all ensemble members are returned
-
-    mode : {"deterministic", "factorial", "montecarlo"}
-        - "deterministic" (the default): gmt is resampled deterministically
-        - "montecarlo" : gmt is simply resampled (may speed-up the computation at the cost of some loss of precision)
-        - "factorial" : gmt is combined with the quantile map in a factorial way
-            The total number of samples is then samples * gmt.shape[1]
-        Note the impact distribution is always resampled in a deterministic way
-
-    clip : bool
-        if True, clip the GMT data to the range of the quantile map, otherwise fill with NaNs
-        False by default
-
-    skipna : bool
-        if True, skip NaN values in the quantiles calculation (default: False)
-        can be useful if clip is set to False
-
-    Returns
-    -------
-    sampled_maps : xa.DataArray with dimensions year, sample
-    """
-    assert tuple(a.dims[:2]) == ("warming_level", "quantile"), f"Expected dimensions ('warming_level', 'quantile'), got {a.dims[:2]}"
-    rng = np.random.default_rng(seed=seed)
-
-    if clip:
-        gmt = gmt.clip(lower=a.coords["warming_level"].values[0], upper=a.coords["warming_level"].values[-1])
-
-    if mode == "deterministic":
-        gmt_quants = equally_spaced_quantiles(samples)
-        resampled_gmt = np.quantile(gmt.values, gmt_quants, axis=1).T
-
-        resampled_quantiles = equally_spaced_quantiles(samples)
-        rng.shuffle(resampled_quantiles)
-
-    elif mode == "montecarlo":
-        igmt = rng.integers(0, gmt.columns.size, size=samples)
-        resampled_gmt = gmt.values[:, igmt]
-
-        iquantiles = rng.integers(0, a.coords["quantile"].size, size=resampled_gmt.shape)
-        resampled_quantiles = a.coords["quantile"].values[iquantiles]
-
-    elif mode == "factorial":
-        samples = gmt.shape[1] * a.coords["quantile"].size
-        resampled_gmt = gmt.values[:, :, None].repeat(a.coords["quantile"].size, axis=2).reshape(gmt.shape[0], -1)
-        resampled_quantiles = a.coords["quantile"].values[None, None, :].repeat(gmt.shape[0], axis=0).repeat(gmt.shape[1], axis=1).reshape(gmt.shape[0], -1)
-
-    else:
-        raise ValueError(f"Unknown mode {mode}")
-
-    # joint sampling of GMT and impact distribution
-    interp = RegularGridInterpolator((a.warming_level.values, a.coords["quantile"].values), a.values, bounds_error=False)
-    sampled_maps = interp((resampled_gmt, resampled_quantiles))
-
-    # create the output DataArray
-    trailing_dims = a.dims[2:]
-    sampled_maps = xa.DataArray(sampled_maps, coords=[
-        gmt.index, np.arange(samples), *(a.coords[d] for d in trailing_dims)], dims=["year", "sample", *trailing_dims])
-
-    # compute quantiles
-    if quantiles is not None:
-        sampled_maps = fast_quantile(sampled_maps, quantiles, dim="sample", skipna=skipna)
-
-    return sampled_maps
-
-
-def _loop(o, indicator, warming_levels, season, mode, open_func_kwargs, filepath):
-
-    if filepath.exists() and not o.overwrite:
-        logger.info(f"{filepath} already exists. Use -O or --overwrite to reprocess.")
-        return
-
-    # to reduce the memory usage, it is possible to split the calls into smaller warming_levels chunks
-    # and concat along the warming level dimension afterwards (it will be less efficient)
-    if mode == "map" and o.map_chunk_size is not None:
-        make_quantile_map_array_ = chunked("lat", o.map_chunk_size, 360)(make_quantile_map_array)
-    else:
-        make_quantile_map_array_ = make_quantile_map_array
-
-    try:
-        array = make_quantile_map_array_(indicator,
-                                        warming_levels,
-                                        season=season,
-                                        quantile_bins=o.quantile_bins,
-                                        running_mean_window=o.running_mean_window,
-                                        projection_baseline=o.projection_baseline,
-                                        equiprobable_models=o.equiprobable_climate_models,
-                                        skip_nans=o.skip_nans,
-                                        open_func_kwargs=open_func_kwargs,
-                                        )
-    except Exception as error:
-        if mode == "regional":
-            logger.warning(error)
-            logger.warning(f"Failed to process {indicator.name}")
-            # raise
-            return
-        raise
-
-    logger.info(f"Write to {filepath}")
-    filepath.parent.mkdir(parents=True, exist_ok=True)
-    encoding = {array.name: {'zlib': True}}
-    array.to_netcdf(filepath, encoding=encoding)
-
-def make_quantilemaps(indicator, season=None, warming_level_file=None, warming_levels=None,
-                       quantile_bins=None, running_mean_window=None, equiprobable_climate_models=True,
-                       simulation_round=None, projection_baseline=None, skip_transform=False,
-                       regional=False, regional_no_admin=False, map=False, map_chunk_size=None,
-                       weight="latWeight", region=None, overwrite=False, suffix="", auto_suffix=True,
-                       skip_nans=False, cpus=None):
-    """Compute quantile maps for one or more indicators.
-
-    Importable equivalent of the `rime-preproc-quantilemaps` CLI tool -- call this
-    directly from a notebook instead of shelling out to the command line.
-
-    Parameters
-    ----------
-    indicator : str or list[str]
-        Indicator name(s) to process, e.g. "heating-degree-days" or ["tas", "pr"]
-    season : str or list[str], optional
-        Season(s) to process (e.g. "annual", "summer"). Defaults to all seasons in `preprocessing.seasons`.
-        Ignored (skipped) for indicators with `frequency == "annual"` unless season == "annual".
-    warming_level_file : str, optional
-        Path to the warming levels CSV. Defaults to the file resolved by `get_warming_level_file`.
-    warming_levels : list[float], optional
-        Subset of warming levels to process. Defaults to all warming levels in the file.
-    quantile_bins : int, optional
-        Number of quantile bins. Defaults to `preprocessing.quantilemap_quantile_bins`.
-    running_mean_window : int, optional
-        Running-mean window size (years). Defaults to `preprocessing.running_mean_window`.
-    equiprobable_climate_models : bool
-        Downweight models that appear more often in the warming-level selection, so every model
-        contributes equally to each warming-level bin. Default True.
-    simulation_round : list[str], optional
-        ISIMIP simulation round(s) to use. Defaults to `isimip.simulation_round`.
-    projection_baseline : (int, int), optional
-        Baseline period for the indicator transform. Defaults to `preprocessing.projection_baseline`.
-    skip_transform : bool
-        If True, use the indicator's absolute values instead of its baseline-relative transform.
-    regional : bool
-        Write one file per region, including admin boundaries.
-    regional_no_admin : bool
-        Write a single merged file across all regions (no admin boundaries).
-    map : bool
-        Write lat/lon gridded quantile maps.
-    map_chunk_size : int, optional
-        Process lat/lon maps in latitude chunks of this size, to limit memory usage.
-    weight : str
-        Regional weighting scheme to use for `regional`/`regional_no_admin` modes. Default "latWeight".
-    region : list[str], optional
-        Regions to process for `regional` mode. Defaults to all regions found via `get_all_regions()`.
-    overwrite : bool
-        Recompute and overwrite existing output files.
-    suffix : str
-        Suffix appended to output filenames.
-    auto_suffix : bool
-        Automatically extend `suffix` to reflect any non-default processing options used.
-    skip_nans : bool
-        Skip NaN values when computing quantiles.
-    cpus : int, optional
-        Number of parallel worker processes (used when processing multiple regions/files at once).
-
-    Returns
-    -------
-    list[Path]
-        Paths of all output files that were (or would have been) written.
-    """
-    if running_mean_window is None:
-        running_mean_window = CONFIG["preprocessing.running_mean_window"]
-    if quantile_bins is None:
-        quantile_bins = CONFIG["preprocessing.quantilemap_quantile_bins"]
-    if warming_levels is None:
-        warming_levels = CONFIG.get("preprocessing.quantilemap_warming_levels")
-    if simulation_round is None:
-        simulation_round = CONFIG["isimip.simulation_round"]
-    if projection_baseline is None:
-        projection_baseline = CONFIG["preprocessing.projection_baseline"]
-    if season is None:
-        season = list(CONFIG["preprocessing.seasons"])
-    elif isinstance(season, str):
-        season = [season]
-    if isinstance(indicator, str):
-        indicator = [indicator]
-
-    o = argparse.Namespace(
-        running_mean_window=running_mean_window, warming_level_file=warming_level_file,
-        warming_levels=warming_levels, quantile_bins=quantile_bins,
-        equiprobable_climate_models=equiprobable_climate_models, indicator=indicator, season=season,
-        simulation_round=simulation_round, projection_baseline=projection_baseline,
-        skip_transform=skip_transform, regional=regional, regional_no_admin=regional_no_admin, map=map,
-        map_chunk_size=map_chunk_size, weight=weight, region=region, overwrite=overwrite, suffix=suffix,
-        auto_suffix=auto_suffix, skip_nans=skip_nans, cpus=cpus,
-    )
-
-    if o.auto_suffix:
-        parts = []
-        if o.skip_transform:
-            parts.append("abs")
-        if o.running_mean_window != CONFIG["preprocessing.running_mean_window"]:
-            parts.append(f"rmw{o.running_mean_window}")
-        if o.warming_levels is not None:
-            parts.append(f"wl{len(o.warming_levels)}")
-        if o.quantile_bins != CONFIG["preprocessing.quantilemap_quantile_bins"]:
-            parts.append(f"qb{o.quantile_bins}")
-        if o.equiprobable_climate_models:
-            parts.append("eq")
-        if len(parts) > 0:
-            o.suffix += "_" + "-".join(parts)
-
-    CONFIG["isimip.simulation_round"] = o.simulation_round
-    CONFIG["preprocessing.projection_baseline"] = o.projection_baseline
-
-    if o.region is None:
-        o.region = get_all_regions()
-
-    if o.warming_level_file is None:
-        o.warming_level_file = get_warming_level_file(**{**CONFIG, **vars(o)})
-
-    warming_levels_df = pd.read_csv(o.warming_level_file)
-
-    if o.warming_levels is not None:
-        quantilemap_warming_levels = np.asarray(o.warming_levels)
-        warming_levels_df = warming_levels_df[warming_levels_df["warming_level"].isin(quantilemap_warming_levels)]
-
-    root_dir = Path(o.warming_level_file).parent
-
-    output_files = []
-
-    for name in o.indicator:
-        ind = Indicator.from_config(name, **({"transform": None} if o.skip_transform else {}))
-
-        for s in o.season:
-            if ind.frequency == "annual" and s != "annual":
-                continue
-
-            for mode in ["regional_no_admin", "regional", "map"]:
-                if not getattr(o, mode):
-                    continue
-
-                if mode == "regional":
-                    open_func_kwargs_loop = [dict(region=r, regional_weight=o.weight) for r in o.region]
-                    files = [get_filepath(ind.name, s, root_dir=root_dir, suffix=o.suffix,
-                                           region=r, regional_weight=o.weight) for r in o.region]
-                else:
-                    regional_flag = mode in ["regional_no_admin", "regional"]
-                    open_func_kwargs_loop = [dict(regional=regional_flag, regional_weight=o.weight)]
-                    files = [get_filepath(ind.name, s, root_dir=root_dir, suffix=o.suffix,
-                                           regional=regional_flag, regional_weight=o.weight)]
-
-                if len(open_func_kwargs_loop) > 1 and o.cpus and o.cpus > 1:
-                    import concurrent.futures
-                    cpus_ = min(o.cpus, len(open_func_kwargs_loop))
-                    executor = concurrent.futures.ProcessPoolExecutor(max_workers=cpus_)
-                else:
-                    executor = argparse.Namespace(submit=lambda f, *args, **kwargs: f(*args, **kwargs))
-
-                jobs = [executor.submit(_loop, o, ind, warming_levels_df, s, mode, open_func_kwargs, filepath)
-                        for filepath, open_func_kwargs in zip(files, open_func_kwargs_loop)]
-
-                for job in jobs:
-                    if job is not None:
-                        job.result()
-
-                output_files.extend(files)
-
-    return output_files
-
-
-def main():
-    parser = argparse.ArgumentParser(description=__doc__, epilog="", formatter_class=argparse.RawDescriptionHelpFormatter, parents=[config_parser, log_parser])
-
-    group = parser.add_argument_group('Warming level matching')
-    group.add_argument("--running-mean-window", default=CONFIG["preprocessing.running_mean_window"], help="default: %(default)s years")
-    group.add_argument("--warming-level-file", default=None)
-    group.add_argument("--warming-levels", type=float, default=CONFIG.get("preprocessing.quantilemap_warming_levels"), nargs='+', help="All warming levels by default")
-    group.add_argument("--quantile-bins", default=CONFIG["preprocessing.quantilemap_quantile_bins"], type=int, help="default: %(default)s")
-
-    egroup = group.add_mutually_exclusive_group()
-    egroup.add_argument("--no-equiprobable-climate-models", action='store_false', dest="equiprobable_climate_models",
-                       help="Do not downweight models that are more frequent in the warming level selection")
-    egroup.add_argument("--equiprobable-climate-models", action='store_true', help=argparse.SUPPRESS)
-
-    group = parser.add_argument_group('Indicator variable')
-    all_variables = list(CONFIG["isimip.variables"]) + sorted(set(v.split(".")[0] for v in CONFIG["indicator"]))
-    group.add_argument("-i", "--indicator", nargs='+', default=[], choices=all_variables)
-    group.add_argument("--season", nargs="+", default=list(CONFIG["preprocessing.seasons"]), choices=list(CONFIG["preprocessing.seasons"]))
-    group.add_argument("--simulation-round", nargs="+", default=CONFIG["isimip.simulation_round"], help="default: %(default)s")
-    group.add_argument("--projection-baseline", default=CONFIG["preprocessing.projection_baseline"], type=int, nargs=2, help="default: %(default)s")
-    group.add_argument("--skip-transform", action='store_true', help="Skip the transformation of the indicator (absolute indicator only)")
-    group.add_argument("--regional", action='store_true', help="Process regional averages (one file per region including admin boundaries)")
-    group.add_argument("--regional-no-admin", action='store_true', help="Process merged regional averages without admin boundaries")
-    group.add_argument("--map", action='store_true', help="Process lat/lon maps")
-    group.add_argument("--map-chunk-size", type=int, choices=[5, 10, 36, 60, 72, 90, 180], help="Process maps in smaller chunk to save memory usage (lat range = 360)")
-
-    group = parser.add_argument_group('Regional average variables')
-    group.add_argument("--weight", default="latWeight", choices=CONFIG["preprocessing.regional.weights"], help="default: %(default)s")
-    group.add_argument("--region", nargs="+", default=None, choices=get_all_regions(), help="Regions to process if --regional")
-
-    parser.add_argument("-O", "--overwrite", action='store_true')
-    parser.add_argument("--suffix", default="", help="add suffix to the output file name (to reflect different processing options)")
-    parser.add_argument("--no-auto-suffix", action='store_false', dest="auto_suffix", help="add an automatically-generated suffix to the output file name (to reflect different processing options)")
-    parser.add_argument("--skip-nans", action='store_true', help="Skip NaN values in the quantile map calculation")
-    parser.add_argument("--cpus", type=int)
-
-    o = parser.parse_args()
-
-    make_quantilemaps(
-        indicator=o.indicator, season=o.season, warming_level_file=o.warming_level_file,
-        warming_levels=o.warming_levels, quantile_bins=o.quantile_bins,
-        running_mean_window=o.running_mean_window, equiprobable_climate_models=o.equiprobable_climate_models,
-        simulation_round=o.simulation_round, projection_baseline=o.projection_baseline,
-        skip_transform=o.skip_transform, regional=o.regional, regional_no_admin=o.regional_no_admin,
-        map=o.map, map_chunk_size=o.map_chunk_size, weight=o.weight, region=o.region,
-        overwrite=o.overwrite, suffix=o.suffix, auto_suffix=o.auto_suffix, skip_nans=o.skip_nans, cpus=o.cpus,
-    )
-
-
-if __name__ == "__main__":
-    main()
-'''
-def main():
-    import argparse
-    parser = argparse.ArgumentParser(description=__doc__, epilog="""""", formatter_class=argparse.RawDescriptionHelpFormatter, parents=[config_parser, log_parser])
-
-    group = parser.add_argument_group('Warming level matching')
-    group.add_argument("--running-mean-window", default=CONFIG["preprocessing.running_mean_window"], help="default: %(default)s years")
-    group.add_argument("--warming-level-file", default=None)
-    group.add_argument("--warming-levels", type=float, default=CONFIG.get("preprocessing.quantilemap_warming_levels"), nargs='+', help="All warming levels by default")
-    group.add_argument("--quantile-bins", default=CONFIG["preprocessing.quantilemap_quantile_bins"], type=int, help="default: %(default)s")
-
-    egroup = group.add_mutually_exclusive_group()
-    egroup.add_argument("--no-equiprobable-climate-models", action='store_false', dest="equiprobable_climate_models",
-                       help="Do not downweight models that are more frequent in the warming level selection")  # equiprobable climate models by default when --no-equi... comes before --equi definition
-    egroup.add_argument("--equiprobable-climate-models", action='store_true', help=argparse.SUPPRESS)
-
-    group = parser.add_argument_group('Indicator variable')
-    all_variables = list(CONFIG["isimip.variables"]) + sorted(set(v.split(".")[0] for v in CONFIG["indicator"]))
-    # group.add_argument("-v", "--variable", nargs='+', default=[], choices=CONFIG["isimip.variables"])
-    group.add_argument("-i", "--indicator", nargs='+', default=[], choices=all_variables)
-    group.add_argument("--season", nargs="+", default=list(CONFIG["preprocessing.seasons"]), choices=list(CONFIG["preprocessing.seasons"]))
-    group.add_argument("--simulation-round", nargs="+", default=CONFIG["isimip.simulation_round"], help="default: %(default)s")
-    group.add_argument("--projection-baseline", default=CONFIG["preprocessing.projection_baseline"], type=int, nargs=2, help="default: %(default)s")
-    group.add_argument("--skip-transform", action='store_true', help="Skip the transformation of the indicator (absolute indicator only)")
-    group.add_argument("--regional", action='store_true', help="Process regional averages (one file per region including admin boundaries)")
-    group.add_argument("--regional-no-admin", action='store_true', help="Process merged regional averages without admin boundaries")
-    group.add_argument("--map", action='store_true', help="Process lat/lon maps")
-    group.add_argument("--map-chunk-size", type=int, choices=[5, 10, 36, 60, 72, 90, 180], help="Process maps in smaller chunk to save memory usage (lat range = 360)")
-
-    group = parser.add_argument_group('Regional average variables')
-    group.add_argument("--weight", default="latWeight", choices=CONFIG["preprocessing.regional.weights"], help="default: %(default)s")
-    group.add_argument("--region", nargs="+", default=None, choices=get_all_regions(), help="Regions to process if --regional")
-
-    parser.add_argument("-O", "--overwrite", action='store_true')
-    parser.add_argument("--suffix", default="", help="add suffix to the output file name (to reflect different processing options)")
-    parser.add_argument("--no-auto-suffix", action='store_false', dest="auto_suffix", help="add an automatically-generated suffix to the output file name (to reflect different processing options)")
-    parser.add_argument("--skip-nans", action='store_true', help="Skip NaN values in the quantile map calculation")
-    parser.add_argument("--cpus", type=int)
-
-    # group = parser.add_argument_group('Result')
-    # group.add_argument("--backend", nargs="+", default=CONFIG["preprocessing.isimip_binned_backend"], choices=["csv", "feather"])
-    # group.add_argument("-O", "--overwrite", action='store_true')
-    # group.add_argument("--cpus", type=int)
-
-    o = parser.parse_args()
-
-    if o.auto_suffix:
-        parts = []
-        if o.skip_transform:
-            parts.append("abs")
-        if o.running_mean_window != CONFIG["preprocessing.running_mean_window"]:
-            parts.append(f"rmw{o.running_mean_window}")
-        if o.warming_levels is not None:
-            parts.append(f"wl{len(o.warming_levels)}")
-        if o.quantile_bins != CONFIG["preprocessing.quantilemap_quantile_bins"]:
-            parts.append(f"qb{o.quantile_bins}")
-        if o.equiprobable_climate_models:
-            parts.append("eq")
-        if len(parts) > 0:
-            o.suffix += "_" + "-".join(parts)
-
-    CONFIG["isimip.simulation_round"] = o.simulation_round
-    CONFIG["preprocessing.projection_baseline"] = o.projection_baseline
-
-    if o.region is None:
-        o.region = get_all_regions()
-
-    if o.warming_level_file is None:
-        o.warming_level_file = get_warming_level_file(**{**CONFIG, **vars(o)})
-
-    warming_levels = pd.read_csv(o.warming_level_file)
-
-    if o.warming_levels is not None:
-        quantilemap_warming_levels = np.asarray(o.warming_levels)
-        warming_levels = warming_levels[warming_levels["warming_level"].isin(quantilemap_warming_levels)]
-
-    root_dir = Path(o.warming_level_file).parent
-
-    for name in o.indicator:
-        indicator = Indicator.from_config(name, **{"transform": None} if o.skip_transform else {})
-
-        for season in o.season:
-            if indicator.frequency == "annual" and season != "annual":
-                continue
-
-            for mode in ["regional_no_admin", "regional", "map"]:
-                if not getattr(o, mode):
-                    continue
-
-                if mode == "regional":
-                    # in that mode loop over all regions and create a file for each, including admin boundaries
-                    open_func_kwargs_loop = [ dict( region=region, regional_weight=o.weight, ) for region in o.region ]
-
-                    files = [get_filepath(indicator.name, season, root_dir=root_dir, suffix=o.suffix,
-                                            region=region, regional_weight=o.weight) for region in o.region]
-
-                else:
-                    # in these modes, create a single file for all regions, without admin boundaries, or a single file for the lat/lon maps
-                    regional = mode in ["regional_no_admin", "regional"]
-                    open_func_kwargs_loop = [dict( regional=regional, regional_weight=o.weight, )]
-                    files = [get_filepath(indicator.name, season, root_dir=root_dir, suffix=o.suffix,
-                                        regional=regional, regional_weight=o.weight)]
-
-                if len(open_func_kwargs_loop) > 1 and o.cpus and o.cpus > 1:
-                    import concurrent.futures
-                    cpus = min(o.cpus, len(open_func_kwargs_loop))
-                    executor = concurrent.futures.ProcessPoolExecutor(max_workers=cpus)
-                else:
-                    executor = argparse.Namespace(submit=lambda f, *args, **kwargs: f(*args, **kwargs))
-
-                jobs = []
-
-                for filepath, open_func_kwargs in zip(files, open_func_kwargs_loop):
-                    jobs.append(executor.submit(_loop, o, indicator, warming_levels, season, mode, open_func_kwargs, filepath))
-
-                for job in jobs:
-                    if job is not None:
-                        job.result()
-
-if __name__ == "__main__":
-    main()
-
 '''
