@@ -62,6 +62,13 @@ def get_mask_file(region, weights, masks_folder=None):
     if not matches:
         raise FileNotFoundError(f"No mask file found for region={region}, weights={weights}")
     return Path(matches[0])
+
+def mask_exists(region, weights, masks_folder=None):
+    try:
+        get_mask_file(region, weights, masks_folder)
+        return True
+    except FileNotFoundError:
+        return False
     
 def open_region_mask(region, weights, masks_folder=None):
     """return DataArray mask from a subregion"""
@@ -182,7 +189,7 @@ def _crunch_regional_averages(indicator, simu, o, write_merged_regional_averages
 
     todo = [(region, weights) for region in o.region
             for weights in o.weights
-                if get_mask_file(region, weights).exists()
+                if mask_exists(region, weights)
                     and (o.overwrite or not _check_file(indicator.get_path(**simu, region=region, regional_weight=weights)))]
     
                             # and (o.overwrite or not get_regional_averages_file(variable, model, experiment, region, weights, impact_model=impact_model).exists())]
