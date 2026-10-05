@@ -142,9 +142,13 @@ def request_dataset(name, specifiers=None, id=None, climate_forcing=None, climat
     if client is None:
         _init_client()
 
-    response = client.datasets(**query, page_size=page_size)
-    results = response['results']
-    count = response['count']
+    # isimip-client >= 2 returns a list unless paginate=True; older versions return a dict
+    response = client.datasets(**query, page_size=page_size, paginate=True)
+    if isinstance(response, list):
+        results, count = response, len(response)
+    else:
+        results = response['results']
+        count = response['count']
 
     if len(results) != count:
         logger.warning(f"Not all results could be fetched. Total count: {count}, fetched: {len(results)}, query: {query}. Modify the page_size limit.")
